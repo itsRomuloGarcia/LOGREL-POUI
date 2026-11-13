@@ -109,14 +109,15 @@ export function linhas(rot: string[], series: Serie[], fmt: (v: number) => strin
   return `${legenda(series)}<svg viewBox="0 0 ${W} ${H}" class="grafico" role="img">${eixos(W, m, y, max, fmt)}${corpo}${eixoX}</svg>`;
 }
 
-/** Barras horizontais com rotulo e valor */
-export function barras(itens: { rot: string; v: number; cor?: string; tip?: string }[], fmt: (v: number) => string): string {
+/** Barras horizontais com rotulo e valor. sub = texto menor ao lado do valor (ex.: percentual);
+ *  max = escala fixa (ex.: 1 para percentuais), senao o maior valor */
+export function barras(itens: { rot: string; v: number; cor?: string; tip?: string; sub?: string }[], fmt: (v: number) => string, max0?: number): string {
   if (!itens.length) return '<p class="muted">Sem dados.</p>';
-  const max = Math.max(1e-9, ...itens.map((i) => i.v));
+  const max = max0 || Math.max(1e-9, ...itens.map((i) => i.v));
   return `<div class="barras">${itens
     .map(
       (i) =>
-        `<div class="barra" data-tip="${esc(i.tip || i.rot + ': ' + fmt(i.v))}"><span class="rot" title="${esc(i.rot)}">${esc(i.rot)}</span><span class="trilho"><span style="width:${(100 * Math.max(0, i.v)) / max}%;background:${i.cor || 'var(--accent)'}"></span></span><span class="val">${esc(fmt(i.v))}</span></div>`,
+        `<div class="barra" data-tip="${esc(i.tip || i.rot + ': ' + fmt(i.v) + (i.sub ? ' (' + i.sub + ')' : ''))}"><span class="rot" title="${esc(i.rot)}">${esc(i.rot)}</span><span class="trilho"><span style="width:${(100 * Math.max(0, i.v)) / max}%;background:${i.cor || 'var(--accent)'}"></span></span><span class="val">${esc(fmt(i.v))}${i.sub ? ` <small>${esc(i.sub)}</small>` : ''}</span></div>`,
     )
     .join('')}</div>`;
 }

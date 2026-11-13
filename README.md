@@ -12,33 +12,34 @@ Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("lo
 
 ## O que a tela faz
 
-**Topo:** filtros (busca, transportadora, UF, tipo de material, tipo de pedido, situação do prazo e período de emissão) e os botões **Atualizar dados**, **Importar planilha** e **Diagnóstico**. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
+**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Importar planilha** e **Diagnóstico**. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
 **Abas:**
 - **Quadros:** as quatro colunas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão). Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
-  - prazo (no prazo × atrasado) e motivos de atraso;
+  - prazo (no prazo × atrasado) e motivos de atraso, com percentual;
+  - comparação entre transportadoras: % no prazo, atraso médio, tempo de entrega, custo médio do CTE, % reentrega e envios;
   - ranking das transportadoras;
   - frete por transportadora, mensal e anual (custo, cobrado ou pedidos);
   - CTE × frete cobrado, com os 20 piores casos;
   - modelos mais enviados, tipo de material e envios por UF.
 
 **Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. O formulário edita:
-- datas: envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
+- datas: saída (`C5_FECENT`, que também preenche a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
 - tipo de material, CTE e valor;
 - reentrega e indicador de atraso;
 - dados comerciais (transportadora, frete, volume e frete não destacado).
 
-A gravação envia só o que mudou.
+A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
 **Importar planilha** (atualização em massa):
 1. Cole as células do Excel, com a linha de títulos, ou escolha um CSV.
-2. As colunas são reconhecidas pelo título ("Nº Pedido", "Vlr CTE", "Previsão Entrega"…) e podem ser ajustadas. Há um modelo para baixar.
+2. As colunas são reconhecidas pelo título ("Nº Pedido", "Vlr CTE", "Previsão Entrega"…) e podem ser ajustadas. Há um modelo para baixar. A planilha atualiza só estes campos: pedido, data de envio, previsão de entrega, data de entrega, tipo de material, CTE, valor do CTE, gerou reentrega, CTE e valor do CTE da reentrega e indicador de atraso. As outras colunas são ignoradas. A nova data da reentrega e os dados comerciais só mudam pela gaveta, mas com reentrega = Sim e sem nova data a importação usa a data de entrega como nova data, e o pedido fica como entregue. Tipo de material ou indicador que não existe no combo não é gravado (aviso na prévia), e o resto da linha grava normalmente.
 3. A prévia mostra, por pedido, o valor atual → o novo valor, ou o motivo do erro. Nada é gravado antes de "Gravar".
 4. Os pedidos são gravados um a um, pela mesma rota da gaveta. No fim aparece o resultado, que pode ser baixado em CSV.
 
-Na importação, a célula vazia não altera nada; há uma opção para que ela apague o valor gravado. O pedido pode vir sem os zeros à esquerda. As datas aceitas são dd/mm/aaaa e dd/mm/aa, e os valores, 1.234,56. Os combos aceitam o código ou a descrição, e a transportadora, o código ou o nome. O pedido precisa estar no período carregado na tela. Formate a coluna de CTE como texto no Excel: CTE em notação científica (1,23E+11) é recusado.
+Na importação, a célula vazia não altera nada; há uma opção para que ela apague o valor gravado. O pedido pode vir sem os zeros à esquerda. As datas aceitas são dd/mm/aaaa e dd/mm/aa, e os valores, 1.234,56. Os combos aceitam o código ou a descrição. O pedido pode ser qualquer um do Protheus: o que não está carregado na tela é buscado pelo número, sem filtro de período, TES ou tipo, e passa a aparecer depois de gravado. Formate a coluna de CTE como texto no Excel: CTE em notação científica (1,23E+11) é recusado.
 
 ## Campos da SC5
 
@@ -52,6 +53,9 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZREENTR` | Gerou reentrega (Sim/Não) | sim |
 | `C5_ZCTEREE` / `C5_ZVCTERE` / `C5_ZNDENT` | CTE, valor e nova data da reentrega | só com reentrega = Sim |
 | `C5_ZINDICA` | Indicador de atraso (combo do SX3) | sim |
+| `C5_ZDTRET` | Data do retorno: a mercadoria voltou para a empresa e o pedido vai para Retornados | sim |
+| `C5_ZMOTRET` | Motivo do retorno (combo: 1=Recusa, 2=Endereço, 3=Avaria, 4=Outros) | só com data do retorno |
+| `C5_ZPEDREN` | Pedido do reenvio (o novo pedido que leva a mercadoria de novo) | só com data do retorno |
 | `C5_TRANSP`, `C5_FRETE`, `C5_VOLUME1`, `C5_ZFRETE` | Transportadora, frete, volume, frete não destacado | só antes da NF |
 | `C5_ZTPPEDI` | Tipo de pedido | não |
 
@@ -61,13 +65,17 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 
 ## Regras principais
 
-- **Pedidos considerados:** os itens com TES de saída que movimenta estoque (`F4_TIPO = 'S'` e `F4_ESTOQUE = 'S'`), `C5_TIPO = 'N'`, não eliminados por resíduo e com emissão no período.
+- **Pedidos considerados** (itens não eliminados por resíduo):
+  - **sem NF:** todos, de qualquer TES, tipo e emissão (os Previstos são todos os pedidos não faturados);
+  - **com NF:** emissão no período da tela e itens com TES de saída que movimenta estoque (`F4_TIPO = 'S'` e `F4_ESTOQUE = 'S'`) em `C5_TIPO = 'N'`, ou pedido com data de envio, de qualquer TES ou tipo;
+  - **nunca:** itens de remessa por conta e ordem (CFOP 5923/6923). O transporte sai em outro pedido.
 - **Cliente e grupo:** cliente, loja e grupo (descrição do `A1_GRPVEN`) vêm do cliente do pedido. Cidade e UF vêm do cliente de **entrega**.
 - **Etapa do pedido:**
   - Entregue: tem a entrega final. A entrega final é a nova data, se houve reentrega; senão, a data de entrega.
   - Enviado: tem data de envio.
   - Faturado: algum item tem NF. Se só parte dos itens tem NF, o pedido é marcado como "NF parcial".
   - Previsto: os demais.
+  - Retornado (vem antes de todas): tem data do retorno. Sem o pedido do reenvio, aparece como "aguardando reenvio".
 - **Prazo:** é medido sempre pela previsão da transportadora.
 - **Datas:** o envio não pode ser anterior à emissão. A entrega exige envio e não pode ser anterior a ele. Reentrega só vale para pedido com data de envio (regra da tela).
 - **Frete:** o frete cobrado é `C5_FRETE` + `C5_ZFRETE`, e o custo, CTE + CTE da reentrega.
@@ -81,6 +89,7 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 |---|---|
 | `GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD` | Pedidos do período: padrão de 365 dias, máximo de 1100. A tela pede de 01/01 do ano anterior até hoje. |
 | `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` | Grava os campos enviados no pedido (R_E_C_N_O_ da SC5) e devolve o pedido atualizado. |
+| `POST /api/v1/vs-financial-data/logistica/pedidos/busca` | `{"pedidos": [...]}`, até 500: pedidos pelo número, sem filtro (usada pela importação). |
 
 **Acesso:** as duas rotas chamam `U_VSAPIACE(.T., "U_LOGRELAPP")`. Passa quem está no `MV_VSAPUSR` ou tem `U_LOGRELAPP` no menu. Com o parâmetro vazio, o acesso é livre. **Erros:** saem no header `X-Erro`, porque o REST descarta o corpo das respostas 500.
 

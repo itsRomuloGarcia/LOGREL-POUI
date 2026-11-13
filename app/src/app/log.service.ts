@@ -42,6 +42,8 @@ export interface Pedido {
   vendedor: string;
   codVendedor: string;
   tipoPedido: string;
+  /** C5_TIPO (N normal, D devolucao, B beneficiamento, C/I/P complementos); API >= 2026-11-13b */
+  tipoNf?: string;
   previsaoSaida: string;
   transportadora: string;
   transportadoraNome: string;
@@ -60,6 +62,10 @@ export interface Pedido {
   valorCteReentrega: number;
   dataNovaEntrega: string;
   indicador: string;
+  /** Mercadoria voltou para a empresa (sera reenviada em outro pedido); API >= 2026-11-13e */
+  dataRetorno?: string;
+  motivoRetorno?: string;
+  pedidoReenvio?: string;
   itens: ItemPedido[];
   notas: string[];
   dataFaturamento: string;
@@ -74,7 +80,7 @@ export interface LogResposta {
   ate: string;
   /** Campos da SC5 que ainda nao existem no ambiente (vem vazios e nao editam) */
   camposFaltando: string[];
-  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[] };
+  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[] };
   tamanhos: Record<string, number>;
   transportadoras: Opcao[];
   total: number;
@@ -83,6 +89,8 @@ export interface LogResposta {
 
 /** Corpo do PUT: so os campos alterados. Datas AAAA-MM-DD, '' limpa */
 export interface PedidoEdicao {
+  /** C5_FECENT (preencher tambem preenche a data de envio); API >= 2026-11-13f */
+  previsaoSaida?: string;
   dataEnvio?: string;
   dataPrevisao?: string;
   dataEntrega?: string;
@@ -94,6 +102,9 @@ export interface PedidoEdicao {
   valorCteReentrega?: number;
   dataNovaEntrega?: string;
   indicador?: string;
+  dataRetorno?: string;
+  motivoRetorno?: string;
+  pedidoReenvio?: string;
   transportadora?: string;
   frete?: number;
   volume?: number;
@@ -118,6 +129,11 @@ export class LogService {
   buscar(de: string, ate: string): Observable<LogResposta> {
     const params = new HttpParams().set('de', de.replace(/-/g, '')).set('ate', ate.replace(/-/g, ''));
     return this.baseRest$.pipe(switchMap((b) => this.http.get<LogResposta>(b + CAMINHO, { params })));
+  }
+
+  /** Pedidos pelo numero, sem filtro de periodo/TES/tipo (importacao). API >= 2026-11-13c */
+  buscarPedidos(pedidos: string[]): Observable<{ versao: string; pedidos: Pedido[]; naoEncontrados: string[] }> {
+    return this.baseRest$.pipe(switchMap((b) => this.http.post<{ versao: string; pedidos: Pedido[]; naoEncontrados: string[] }>(`${b}${CAMINHO}/busca`, { pedidos })));
   }
 
   salvar(recno: number, dados: PedidoEdicao): Observable<Pedido> {

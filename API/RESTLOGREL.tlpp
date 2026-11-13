@@ -5,10 +5,25 @@
 // LOGISTICA (LOGREL) - pedidos de entrega para a tela PO UI U_LOGRELAPP
 //
 // GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD
-//   Base = item do pedido (SC6) com TES de SAIDA que MOVIMENTA estoque
-//   (F4_TIPO = 'S' e F4_ESTOQUE = 'S'), pedido normal (C5_TIPO = 'N'), item
-//   nao eliminado por residuo (C6_BLQ <> 'R'), pedido emitido no periodo
-//   (C5_EMISSAO). Pedido sem nenhum item assim nao aparece.
+//   Base = item do pedido (SC6) nao eliminado por residuo (C6_BLQ <> 'R') e:
+//   a) pedido SEM NOTA (nenhum item com C6_NOTA real): TODOS, de qualquer TES,
+//      tipo (C5_TIPO) e emissao - e o "Previstos" da tela, igual aos pedidos
+//      em aberto do MATA410 (pedido do usuario, 13/11/2026);
+//   b) pedido COM NOTA emitido no periodo (C5_EMISSAO) e: item com TES de
+//      SAIDA que MOVIMENTA estoque (F4_TIPO = 'S' e F4_ESTOQUE = 'S') em pedido
+//      normal (C5_TIPO = 'N'), OU pedido com data de envio (C5_ZDTENV), de
+//      qualquer TES/tipo: o que a logistica registrou aparece (2026-11-13c).
+//   Fora sempre: item de REMESSA POR CONTA E ORDEM (CFOP x923 no C6_CF: 5923,
+//   6923). E so o documento fiscal; o transporte sai em outro pedido, que e o
+//   que a logistica acompanha (pedido do usuario, 13/11/2026, 2026-11-13d).
+//
+// POST /api/v1/vs-financial-data/logistica/pedidos/busca  {"pedidos": ["000009", ...]}
+//   Os pedidos pedidos pelo numero, SEM filtro de TES, tipo, emissao ou residuo
+//   (ate 500 por chamada). A importacao da tela usa para achar o que nao veio
+//   no GET: a planilha pode trazer qualquer pedido (pedido do usuario, 13/11/2026).
+//   Resposta {"versao", "pedidos": [...], "naoEncontrados": [...]}.
+//   Pedido de devolucao/beneficiamento (C5_TIPO D/B) e de fornecedor: nome,
+//   cidade e UF vem da SA2.
 //   Resposta agrupada por pedido (cabecalho SC5 + itens SC6).
 //   - Cliente/loja = C5_CLIENTE/C5_LOJACLI (nome e grupo A1_GRPVEN -> ACY_DESCRI);
 //     cidade/UF = cliente de ENTREGA (C5_CLIENT/C5_LOJAENT).
@@ -21,8 +36,12 @@
 //     C5_VOLUME1: conferidos no ALL_TAB_COLUMNS a cada consulta. Campo que nao
 //     existe vira ' ' na query (coluna inexistente derruba a thread do REST sem
 //     passar pelo Recover) e sai em "camposFaltando".
-//   - "opcoes": combos do SX3 (X3_CBOX) de C5_ZTPMAT, C5_ZINDICA, C5_ZREENTR e
-//     C5_ZTPPEDI, para a tela nao depender de lista fixa.
+//   - Retorno a empresa (2026-11-13e): C5_ZDTRET (data), C5_ZMOTRET (combo:
+//     1=Recusa;2=Endereco;3=Avaria;4=Outros) e C5_ZPEDREN (pedido do reenvio).
+//     A mercadoria volta e sai de novo em OUTRO pedido; a tela poe o original
+//     na coluna Retornados. Opcionais como os outros Z (ALL_TAB_COLUMNS).
+//   - "opcoes": combos do SX3 (X3_CBOX) de C5_ZTPMAT, C5_ZINDICA, C5_ZREENTR,
+//     C5_ZTPPEDI e C5_ZMOTRET, para a tela nao depender de lista fixa.
 //   - "transportadoras": SA4 inteira (codigo e nome), para a edicao.
 //
 // PUT /api/v1/vs-financial-data/logistica/pedidos/:recno  (R_E_C_N_O_ da SC5)
@@ -30,6 +49,10 @@
 //   SX3), so os campos enviados no corpo. Regras:
 //   - envio >= emissao do pedido; entrega exige envio e entrega >= envio;
 //   - campos de reentrega so com C5_ZREENTR = SIM (valor final);
+//   - C5_FECENT ("previsaoSaida", data de saida): preenchido sem dataEnvio no
+//     corpo, grava tambem C5_ZDTENV com a mesma data (2026-11-13f);
+//   - retorno exige envio e retorno >= envio; motivo e pedido do reenvio so
+//     com data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
 //   - transportadora, frete, volume e frete nao destacado so enquanto o
 //     pedido NAO tem nota (depois da NF esses dados ja sairam no documento);
 //   - combo: so codigo existente no X3_CBOX; texto no limite do TamSX3.
@@ -42,12 +65,13 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-13a"
+#define LG_VERSAO     "2026-11-13f"
 #define LG_DIAS_PADR  365
 #define LG_DIAS_MAX   1100
+#define LG_BUSCA_MAX  500
 
 /*/{Protheus.doc} getVsLogPedidos
-Pedidos de entrega (cabecalho + itens com TES de saida que movimenta estoque).
+Pedidos de entrega: todos os sem nota + os com nota (TES de saida com estoque) do periodo.
 @type function
 @author Romulo Garcia
 @since 13/11/2026
@@ -101,13 +125,14 @@ Static Function LerPedidos()
       EndIf
 
       cEtapa := "02-pedidos"
-      aPed := ConsultaPedidos(dDe, dAte, "", @aFalta, @cEtapa, @cAlAberto)
+      aPed := ConsultaPedidos(dDe, dAte, {}, @aFalta, @cEtapa, @cAlAberto)
 
       cEtapa := "03-opcoes"
       jOpc["tipoMaterial"] := OpcoesCombo("C5_ZTPMAT")
       jOpc["indicador"]    := OpcoesCombo("C5_ZINDICA")
       jOpc["reentrega"]    := OpcoesCombo("C5_ZREENTR")
       jOpc["tipoPedido"]   := OpcoesCombo("C5_ZTPPEDI")
+      jOpc["motivoRetorno"]:= OpcoesCombo("C5_ZMOTRET")
 
       cEtapa := "04-resposta"
       jResp["versao"]          := LG_VERSAO
@@ -148,7 +173,7 @@ Campo ausente no corpo = nao altera; texto vazio limpa.
 @author Romulo Garcia
 @since 13/11/2026
 @pathparam recno, Numeric, R_E_C_N_O_ da SC5 ("recno" do pedido no GET)
-@body {"dataEnvio": "AAAA-MM-DD", "dataPrevisao": "...", "dataEntrega": "...", "tipoMaterial": "T", "cte": "...", "valorCte": 0, "reentrega": "S"|"N"|"", "cteReentrega": "...", "valorCteReentrega": 0, "dataNovaEntrega": "...", "indicador": "1", "transportadora": "000001", "frete": 0, "volume": 0, "freteNaoDestacado": 0}
+@body {"previsaoSaida": "AAAA-MM-DD", "dataEnvio": "AAAA-MM-DD", "dataPrevisao": "...", "dataEntrega": "...", "tipoMaterial": "T", "cte": "...", "valorCte": 0, "reentrega": "S"|"N"|"", "cteReentrega": "...", "valorCteReentrega": 0, "dataNovaEntrega": "...", "indicador": "1", "dataRetorno": "...", "motivoRetorno": "1", "pedidoReenvio": "003500", "transportadora": "000001", "frete": 0, "volume": 0, "freteNaoDestacado": 0}
 /*/
 @Put("/api/v1/vs-financial-data/logistica/pedidos/:recno")
 User Function putVsLogPedido() as Logical
@@ -180,6 +205,9 @@ Static Function GravaPedido()
    Local nPos        := 0
    Local lComercial  := .F.
    Local lReeCampos  := .F.
+   Local lRetCampos  := .F.
+   Local dRet        := CToD("")
+   Local nTamNum     := 0
    Local cPedido     := ""
    Local dEmis       := CToD("")
    Local dEnv        := CToD("")
@@ -276,6 +304,23 @@ Static Function GravaPedido()
                lRespondido := .T.
                Break
             EndIf
+         ElseIf cTipo == "P"
+            // numero de outro pedido (reenvio): completa os zeros e confere na SC5
+            xVal := Upper(AllTrim(TxtIn(jBody[cChave])))
+            nTamNum := TamSX3("C5_NUM")[1]
+            If !Empty(xVal) .and. Len(xVal) < nTamNum .and. SoDigitos(xVal)
+               xVal := PadL(xVal, nTamNum, "0")
+            EndIf
+            If !Empty(xVal) .and. xVal == AllTrim(cPedido)
+               jRet := BuildErro(400, "REENVIO_MESMO_PEDIDO", "O pedido do reenvio tem que ser outro pedido.")
+               lRespondido := .T.
+               Break
+            EndIf
+            If !Empty(xVal) .and. !ExistePedido(xVal)
+               jRet := BuildErro(400, "PEDIDO_REENVIO_INEXISTENTE", "Pedido do reenvio " + xVal + " nao encontrado (SC5).")
+               lRespondido := .T.
+               Break
+            EndIf
          Else
             xVal := AllTrim(TxtIn(jBody[cChave]))
          EndIf
@@ -289,6 +334,8 @@ Static Function GravaPedido()
             lComercial := .T.
          ElseIf aMapa[nI][4] == "REE" .and. !Empty(xVal)
             lReeCampos := .T.
+         ElseIf aMapa[nI][4] == "RET" .and. !Empty(xVal)
+            lRetCampos := .T.
          EndIf
          aAdd(aGrava, {cCampo, xVal, cTipo})
       Next nI
@@ -305,6 +352,11 @@ Static Function GravaPedido()
       EndIf
 
       cEtapa := "04-regras"
+      // Data de saida (C5_FECENT) preenchida sem a data de envio no corpo: o envio recebe a mesma data
+      nPos := aScan(aGrava, {|x| x[1] == "C5_FECENT"})
+      If nPos > 0 .and. !Empty(aGrava[nPos][2]) .and. aScan(aGrava, {|x| x[1] == "C5_ZDTENV"}) == 0 .and. SC5->(FieldPos("C5_ZDTENV")) > 0
+         aAdd(aGrava, {"C5_ZDTENV", aGrava[nPos][2], "D"})
+      EndIf
       // Valores finais = o que veio no corpo ou o que ja esta gravado
       dEnv  := DataFinal(aGrava, "C5_ZDTENV")
       dEnt  := DataFinal(aGrava, "C5_ZDTENTR")
@@ -340,6 +392,22 @@ Static Function GravaPedido()
          lRespondido := .T.
          Break
       EndIf
+      dRet := DataFinal(aGrava, "C5_ZDTRET")
+      If !Empty(dRet) .and. Empty(dEnv)
+         jRet := BuildErro(400, "RETORNO_SEM_ENVIO", "Retorno so para pedido enviado: informe a data de envio.")
+         lRespondido := .T.
+         Break
+      EndIf
+      If !Empty(dRet) .and. dRet < dEnv
+         jRet := BuildErro(400, "RETORNO_ANTES_ENVIO", "Data do retorno (" + DToC(dRet) + ") anterior ao envio (" + DToC(dEnv) + ").")
+         lRespondido := .T.
+         Break
+      EndIf
+      If lRetCampos .and. Empty(dRet)
+         jRet := BuildErro(400, "SEM_RETORNO", "Motivo e pedido do reenvio so com a data do retorno.")
+         lRespondido := .T.
+         Break
+      EndIf
       If lComercial .and. TemNota(cPedido)
          jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, frete e volume nao podem mais ser alterados aqui.")
          lRespondido := .T.
@@ -361,11 +429,11 @@ Static Function GravaPedido()
       lTravou := .F.
 
       cEtapa := "06-resposta"
-      aPed := ConsultaPedidos(CToD(""), CToD(""), cPedido, @aIgnora, @cEtapa, @cAlAberto)
+      aPed := ConsultaPedidos(CToD(""), CToD(""), {cPedido}, @aIgnora, @cEtapa, @cAlAberto)
       If Len(aPed) > 0
          jRet := oRest:setStatusResponse(200, aPed[1]:ToJson())
       Else
-         // gravou, mas o pedido nao passa no filtro da tela (sem item de saida com estoque)
+         // gravou, mas o pedido nao tem item (nao deveria acontecer na busca sem filtro)
          jRet := oRest:setStatusResponse(200, '{"recno":' + cValToChar(nRecno) + ',"aviso":"gravado"}')
       EndIf
       lRespondido := .T.
@@ -390,12 +458,124 @@ Static Function GravaPedido()
    EndIf
 Return jRet
 
+/*/{Protheus.doc} postVsLogBusca
+Pedidos pelo numero, sem filtro de periodo, TES, tipo ou residuo (importacao da tela).
+@type function
+@author Romulo Garcia
+@since 13/11/2026
+@body {"pedidos": ["000009", "000010"]}  (ate LG_BUSCA_MAX numeros)
+/*/
+@Post("/api/v1/vs-financial-data/logistica/pedidos/busca")
+User Function postVsLogBusca() as Logical
+   If !U_VSAPIACE(.T., "U_LOGRELAPP")
+      Return .T.
+   EndIf
+Return BuscaPedidos()
+
+Static Function BuscaPedidos()
+   Local jBody       := JsonObject():New()
+   Local jResp       := JsonObject():New()
+   Local jRet        := Nil
+   Local xErrJson    := Nil
+   Local bErrOld     := ErrorBlock({|oE| Break(oE) })
+   Local oErrCap     := Nil
+   Local cEtapa      := "00-inicio"
+   Local lRespondido := .F.
+   Local aNums       := {}
+   Local aLista      := {}
+   Local aPed        := {}
+   Local aIgnora     := {}
+   Local aNao        := {}
+   Local cAlAberto   := ""
+   Local cNum        := ""
+   Local nI          := 0
+   Local nTam        := 0
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      cEtapa := "01-parametros"
+      xErrJson := jBody:FromJson(SStr(oRest:getBodyRequest()))
+      If ValType(xErrJson) == "C"
+         jRet := BuildErro(400, "JSON_INVALIDO", "Corpo da requisicao nao e um JSON valido.")
+         lRespondido := .T.
+         Break
+      EndIf
+      aNums := jBody["pedidos"]
+      If ValType(aNums) != "A" .or. Len(aNums) == 0
+         jRet := BuildErro(400, "SEM_PEDIDOS", "Informe a lista de pedidos.")
+         lRespondido := .T.
+         Break
+      EndIf
+      If Len(aNums) > LG_BUSCA_MAX
+         jRet := BuildErro(400, "PEDIDOS_DEMAIS", "No maximo " + cValToChar(LG_BUSCA_MAX) + " pedidos por chamada.")
+         lRespondido := .T.
+         Break
+      EndIf
+      nTam := TamSX3("C5_NUM")[1]
+      For nI := 1 to Len(aNums)
+         If ValType(aNums[nI]) == "N"
+            cNum := cValToChar(aNums[nI])
+         Else
+            cNum := Upper(AllTrim(SStr(aNums[nI])))
+         EndIf
+         If Empty(cNum) .or. Len(cNum) > nTam
+            Loop
+         EndIf
+         cNum := PadR(cNum, nTam)
+         If aScan(aLista, {|x| x == cNum}) == 0
+            aAdd(aLista, cNum)
+         EndIf
+      Next nI
+      If Len(aLista) == 0
+         jRet := BuildErro(400, "SEM_PEDIDOS", "Nenhum numero de pedido valido na lista.")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      cEtapa := "02-pedidos"
+      aPed := ConsultaPedidos(CToD(""), CToD(""), aLista, @aIgnora, @cEtapa, @cAlAberto)
+
+      cEtapa := "03-resposta"
+      For nI := 1 to Len(aLista)
+         cNum := AllTrim(aLista[nI])
+         If aScan(aPed, {|j| j["pedido"] == cNum}) == 0
+            aAdd(aNao, cNum)
+         EndIf
+      Next nI
+      jResp["versao"]         := LG_VERSAO
+      jResp["pedidos"]        := aPed
+      jResp["naoEncontrados"] := aNao
+      jRet := oRest:setStatusResponse(200, jResp:ToJson())
+      lRespondido := .T.
+
+   Recover Using oErrCap
+      If !Empty(cAlAberto) .and. Select(cAlAberto) > 0
+         (cAlAberto)->(DbCloseArea())
+      EndIf
+      oRest:setKeyHeaderResponse("X-Erro-Etapa", cEtapa)
+      If !lRespondido
+         jRet := BuildErro(500, "ERRO_INTERNO", "etapa=[" + cEtapa + "] " + TxtErro(oErrCap))
+         lRespondido := .T.
+      EndIf
+   End Sequence
+
+   ErrorBlock(bErrOld)
+   If !lRespondido
+      jRet := BuildErro(500, "ERRO_INTERNO", "Erro inesperado.")
+   EndIf
+Return jRet
+
 // {chave do JSON, campo, tipo, grupo}
 // tipo: D data, N numero, F frete texto (C5_ZFRETE), S sim/nao (combo),
 //       B codigo de combo, T transportadora (SA4), C texto
-// grupo: LOG logistica, REE reentrega, COM comercial (so antes da nota)
+//       P numero de outro pedido (SC5)
+// grupo: LOG logistica, REE reentrega, RET retorno (so com data do retorno),
+//        COM comercial (so antes da nota)
 Static Function MapaCampos()
    Local aMapa := {}
+   aAdd(aMapa, {"previsaoSaida",     "C5_FECENT",  "D", "LOG"})
    aAdd(aMapa, {"dataEnvio",         "C5_ZDTENV",  "D", "LOG"})
    aAdd(aMapa, {"dataPrevisao",      "C5_ZDTPREV", "D", "LOG"})
    aAdd(aMapa, {"dataEntrega",       "C5_ZDTENTR", "D", "LOG"})
@@ -407,6 +587,9 @@ Static Function MapaCampos()
    aAdd(aMapa, {"valorCteReentrega", "C5_ZVCTERE", "N", "REE"})
    aAdd(aMapa, {"dataNovaEntrega",   "C5_ZNDENT",  "D", "REE"})
    aAdd(aMapa, {"indicador",         "C5_ZINDICA", "B", "LOG"})
+   aAdd(aMapa, {"dataRetorno",       "C5_ZDTRET",  "D", "LOG"})
+   aAdd(aMapa, {"motivoRetorno",     "C5_ZMOTRET", "B", "RET"})
+   aAdd(aMapa, {"pedidoReenvio",     "C5_ZPEDREN", "P", "RET"})
    aAdd(aMapa, {"transportadora",    "C5_TRANSP",  "T", "COM"})
    aAdd(aMapa, {"frete",             "C5_FRETE",   "N", "COM"})
    aAdd(aMapa, {"volume",            "C5_VOLUME1", "N", "COM"})
@@ -470,6 +653,31 @@ Static Function TemNota(cPedido)
    oStmt:Destroy()
 Return lRet
 
+// Pedido existe na filial (por SQL: nao mexe no registro posicionado da SC5)
+Static Function ExistePedido(cNum)
+   Local cAl   := GetNextAlias()
+   Local oStmt := Nil
+   Local lRet  := .F.
+   oStmt := FWExecStatement():New("SELECT COUNT(*) AS QTD FROM " + RetSqlName("SC5") + " WHERE C5_FILIAL = ? AND C5_NUM = ? AND D_E_L_E_T_ = ' '")
+   oStmt:SetString(1, FWxFilial("SC5"))
+   oStmt:SetString(2, PadR(cNum, TamSX3("C5_NUM")[1]))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      lRet := NNum((cAl)->QTD) > 0
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return lRet
+
+Static Function SoDigitos(cTxt)
+   Local nI := 0
+   For nI := 1 to Len(cTxt)
+      If !IsDigit(SubStr(cTxt, nI, 1))
+         Return .F.
+      EndIf
+   Next nI
+Return .T.
+
 Static Function ExisteTransp(cCod)
    Local lRet := .F.
    DbSelectArea("SA4")
@@ -478,10 +686,11 @@ Static Function ExisteTransp(cCod)
 Return lRet
 
 // ----------------------------------------------------------------------------
-// Consulta principal. cPedido preenchido = so esse pedido (ignora o periodo).
+// Consulta principal. aLista com numeros (C5_NUM no tamanho do campo) = so
+// esses pedidos, sem filtro de periodo, TES, tipo ou residuo.
 // aFalta recebe os campos opcionais que nao existem na SC5.
 // ----------------------------------------------------------------------------
-Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
+Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    Local aPed    := {}
    Local lTemPed := .F.
    Local cExist  := ColunasExistentes()
@@ -501,11 +710,16 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
 
    aFalta := {}
    cEtapa := "02a-query"
-   cQuery := "SELECT SC5.R_E_C_N_O_ AS RECSC5, SC5.C5_NUM AS PEDIDO, SC5.C5_EMISSAO AS EMISSAO, "
+   cQuery := "SELECT SC5.R_E_C_N_O_ AS RECSC5, SC5.C5_NUM AS PEDIDO, SC5.C5_EMISSAO AS EMISSAO, SC5.C5_TIPO AS TIPONF, "
    cQuery += "       SC5.C5_CLIENTE AS CLIENTE, SC5.C5_LOJACLI AS LOJA, SC5.C5_CLIENT AS CLIENT, SC5.C5_LOJAENT AS LOJAENT, "
    cQuery += "       SC5.C5_FECENT AS FECENT, SC5.C5_VEND1 AS CODVEND, SC5.C5_TRANSP AS CODTRANSP, SC5.C5_FRETE AS FRETE, "
-   cQuery += "       SA1.A1_NOME AS NOME, SA1.A1_NREDUZ AS FANTASIA, SA1.A1_GRPVEN AS CODGRP, ACY.ACY_DESCRI AS GRUPO, "
-   cQuery += "       SAE.A1_NOME AS NOMEENT, SAE.A1_MUN AS CIDADE, SAE.A1_EST AS UF, "
+   // devolucao/beneficiamento (D/B): o "cliente" e fornecedor (SA2)
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_NOME ELSE SA1.A1_NOME END AS NOME, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_NREDUZ ELSE SA1.A1_NREDUZ END AS FANTASIA, "
+   cQuery += "       SA1.A1_GRPVEN AS CODGRP, ACY.ACY_DESCRI AS GRUPO, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_NOME ELSE SAE.A1_NOME END AS NOMEENT, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_MUN ELSE SAE.A1_MUN END AS CIDADE, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_EST ELSE SAE.A1_EST END AS UF, "
    cQuery += "       SA3.A3_NOME AS VENDEDOR, SA4.A4_NOME AS TRANSP, "
    cQuery += "       " + ColOpc(cExist, "C5_ZTPPEDI", "TIPOPED", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZFRETE", "ZFRETE", @aFalta) + ", "
@@ -521,6 +735,9 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ZVCTERE", "VCTERE", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZNDENT", "NDENT", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZINDICA", "INDICA", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZDTRET", "DTRET", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZMOTRET", "MOTRET", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZPEDREN", "PEDREN", @aFalta) + ", "
    cQuery += "       SC6.C6_ITEM AS ITEM, SC6.C6_PRODUTO AS PRODUTO, SC6.C6_DESCRI AS DESCRI, "
    cQuery += "       SC6.C6_QTDVEN AS QTDVEN, SC6.C6_QTDENT AS QTDENT, SC6.C6_VALOR AS VALOR, "
    cQuery += "       SC6.C6_TES AS TES, SF4.F4_TEXTO AS DESCTES, SC6.C6_NOTA AS NOTA, SC6.C6_SERIE AS SERIE, "
@@ -528,13 +745,17 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
    cQuery += "FROM " + RetSqlName("SC6") + " SC6 "
    cQuery += "INNER JOIN " + RetSqlName("SC5") + " SC5 ON SC5.C5_FILIAL = SC6.C6_FILIAL "
    cQuery += "    AND SC5.C5_NUM = SC6.C6_NUM AND SC5.D_E_L_E_T_ = ' ' "
-   // TES de saida que movimenta estoque (filial exata para nao duplicar)
-   cQuery += "INNER JOIN " + RetSqlName("SF4") + " SF4 ON SF4.F4_FILIAL = '" + FWxFilial("SF4") + "' "
-   cQuery += "    AND SF4.F4_CODIGO = SC6.C6_TES AND SF4.F4_TIPO = 'S' AND SF4.F4_ESTOQUE = 'S' AND SF4.D_E_L_E_T_ = ' ' "
+   // TES (filial exata para nao duplicar). LEFT: pedido sem nota entra com qualquer TES
+   cQuery += "LEFT JOIN " + RetSqlName("SF4") + " SF4 ON SF4.F4_FILIAL = '" + FWxFilial("SF4") + "' "
+   cQuery += "    AND SF4.F4_CODIGO = SC6.C6_TES AND SF4.D_E_L_E_T_ = ' ' "
    cQuery += "LEFT JOIN " + RetSqlName("SA1") + " SA1 ON (SA1.A1_FILIAL = '" + FWxFilial("SA1") + "' OR SA1.A1_FILIAL = ' ') "
-   cQuery += "    AND SA1.A1_COD = SC5.C5_CLIENTE AND SA1.A1_LOJA = SC5.C5_LOJACLI AND SA1.D_E_L_E_T_ = ' ' "
+   cQuery += "    AND SA1.A1_COD = SC5.C5_CLIENTE AND SA1.A1_LOJA = SC5.C5_LOJACLI AND SC5.C5_TIPO NOT IN ('D','B') AND SA1.D_E_L_E_T_ = ' ' "
    cQuery += "LEFT JOIN " + RetSqlName("SA1") + " SAE ON (SAE.A1_FILIAL = '" + FWxFilial("SA1") + "' OR SAE.A1_FILIAL = ' ') "
-   cQuery += "    AND SAE.A1_COD = SC5.C5_CLIENT AND SAE.A1_LOJA = SC5.C5_LOJAENT AND SAE.D_E_L_E_T_ = ' ' "
+   cQuery += "    AND SAE.A1_COD = SC5.C5_CLIENT AND SAE.A1_LOJA = SC5.C5_LOJAENT AND SC5.C5_TIPO NOT IN ('D','B') AND SAE.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA2") + " SA2 ON (SA2.A2_FILIAL = '" + FWxFilial("SA2") + "' OR SA2.A2_FILIAL = ' ') "
+   cQuery += "    AND SA2.A2_COD = SC5.C5_CLIENTE AND SA2.A2_LOJA = SC5.C5_LOJACLI AND SC5.C5_TIPO IN ('D','B') AND SA2.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA2") + " SFE ON (SFE.A2_FILIAL = '" + FWxFilial("SA2") + "' OR SFE.A2_FILIAL = ' ') "
+   cQuery += "    AND SFE.A2_COD = SC5.C5_CLIENT AND SFE.A2_LOJA = SC5.C5_LOJAENT AND SC5.C5_TIPO IN ('D','B') AND SFE.D_E_L_E_T_ = ' ' "
    cQuery += "LEFT JOIN " + RetSqlName("ACY") + " ACY ON (ACY.ACY_FILIAL = '" + FWxFilial("ACY") + "' OR ACY.ACY_FILIAL = ' ') "
    cQuery += "    AND ACY.ACY_GRPVEN = SA1.A1_GRPVEN AND SA1.A1_GRPVEN <> ' ' AND ACY.D_E_L_E_T_ = ' ' "
    cQuery += "LEFT JOIN " + RetSqlName("SA3") + " SA3 ON (SA3.A3_FILIAL = '" + FWxFilial("SA3") + "' OR SA3.A3_FILIAL = ' ') "
@@ -543,15 +764,34 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
    cQuery += "    AND SA4.A4_COD = SC5.C5_TRANSP AND SC5.C5_TRANSP <> ' ' AND SA4.D_E_L_E_T_ = ' ' "
    cQuery += "LEFT JOIN " + RetSqlName("SF2") + " SF2 ON (SF2.F2_FILIAL = '" + FWxFilial("SF2") + "' OR SF2.F2_FILIAL = ' ') "
    cQuery += "    AND SF2.F2_DOC = SC6.C6_NOTA AND SF2.F2_SERIE = SC6.C6_SERIE AND SC6.C6_NOTA <> ' ' AND SF2.D_E_L_E_T_ = ' ' "
-   cQuery += "WHERE SC6.C6_FILIAL = ? AND SC6.D_E_L_E_T_ = ' ' AND SC6.C6_BLQ <> 'R' AND SC5.C5_TIPO = 'N' "
+   cQuery += "WHERE SC6.C6_FILIAL = ? AND SC6.D_E_L_E_T_ = ' ' "
    aAdd(aBinds, FWxFilial("SC6"))
-   If !Empty(cPedido)
-      cQuery += "  AND SC5.C5_NUM = ? "
-      aAdd(aBinds, cPedido)
+   If Len(aLista) > 0
+      // busca pelo numero (importacao, resposta do PUT): sem nenhum outro filtro
+      cQuery += "  AND SC5.C5_NUM IN ("
+      For nB := 1 to Len(aLista)
+         cQuery += IIf(nB > 1, ",", "") + "?"
+         aAdd(aBinds, aLista[nB])
+      Next nB
+      cQuery += ") "
    Else
-      cQuery += "  AND SC5.C5_EMISSAO BETWEEN ? AND ? "
+      cQuery += "  AND SC6.C6_BLQ <> 'R' "
+      // remessa por conta e ordem (5923/6923): o transporte vai em outro pedido
+      cQuery += "  AND SUBSTR(SC6.C6_CF, 2, 3) <> '923' "
+      // a) emitido no periodo: TES de saida com estoque em pedido normal, ou
+      //    pedido com data de envio (qualquer TES/tipo)
+      cQuery += "  AND ( ( SC5.C5_EMISSAO BETWEEN ? AND ? "
       aAdd(aBinds, DToS(dDe))
       aAdd(aBinds, DToS(dAte))
+      cQuery += "          AND ( ( SC5.C5_TIPO = 'N' AND SF4.F4_TIPO = 'S' AND SF4.F4_ESTOQUE = 'S' ) "
+      If "|C5_ZDTENV|" $ cExist
+         cQuery += "                OR SC5.C5_ZDTENV <> ' ' "
+      EndIf
+      cQuery += "              ) ) "
+      // b) sem nota em nenhum item (C6_NOTA "XXX..." = residuo, nao e nota): todos
+      cQuery += "     OR NOT EXISTS (SELECT 1 FROM " + RetSqlName("SC6") + " NFI "
+      cQuery += "                     WHERE NFI.C6_FILIAL = SC6.C6_FILIAL AND NFI.C6_NUM = SC6.C6_NUM "
+      cQuery += "                       AND NFI.C6_NOTA <> ' ' AND NFI.C6_NOTA NOT LIKE 'X%' AND NFI.D_E_L_E_T_ = ' ') ) "
    EndIf
    cQuery += "ORDER BY SC5.C5_NUM, SC6.C6_ITEM "
 
@@ -583,6 +823,7 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
          jPed["recno"]             := NNum((cAlias)->RECSC5)
          jPed["pedido"]            := AllTrim((cAlias)->PEDIDO)
          jPed["emissao"]           := IsoOut((cAlias)->EMISSAO)
+         jPed["tipoNf"]            := AllTrim(SStr((cAlias)->TIPONF))
          jPed["cliente"]           := AllTrim(SStr((cAlias)->CLIENTE))
          jPed["loja"]              := AllTrim(SStr((cAlias)->LOJA))
          jPed["nome"]              := TxtOut((cAlias)->NOME)
@@ -614,6 +855,9 @@ Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
          jPed["valorCteReentrega"] := NNum((cAlias)->VCTERE)
          jPed["dataNovaEntrega"]   := IsoOut((cAlias)->NDENT)
          jPed["indicador"]         := AllTrim(cValToChar((cAlias)->INDICA))
+         jPed["dataRetorno"]       := IsoOut((cAlias)->DTRET)
+         jPed["motivoRetorno"]     := AllTrim(cValToChar((cAlias)->MOTRET))
+         jPed["pedidoReenvio"]     := AllTrim(cValToChar((cAlias)->PEDREN))
       EndIf
 
       jIt := JsonObject():New()

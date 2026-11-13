@@ -37,6 +37,7 @@ export class App implements AfterViewInit, OnDestroy {
       {
         carregar: (d, a) => this.carregar(d, a),
         salvar: (r, d) => this.guardarErro('Salvar pedido', firstValueFrom(this.log.salvar(r, d))),
+        buscarPedidos: (n) => this.guardarErro('Buscar pedidos', firstValueFrom(this.log.buscarPedidos(n))).then((r) => r?.pedidos || []),
         mensagemErro: (e) => mensagemErro(e),
         diagnostico: () => firstValueFrom(this.log.baseRest$).then((b) => this.diagnostico(b)),
         fechar: this.dentroProtheus() ? () => this.proConfig.callAppClose() : null,
