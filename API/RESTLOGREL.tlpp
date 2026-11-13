@@ -1,0 +1,884 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+// ============================================================================
+// LOGISTICA (LOGREL) - pedidos de entrega para a tela PO UI U_LOGRELAPP
+//
+// GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD
+//   Base = item do pedido (SC6) com TES de SAIDA que MOVIMENTA estoque
+//   (F4_TIPO = 'S' e F4_ESTOQUE = 'S'), pedido normal (C5_TIPO = 'N'), item
+//   nao eliminado por residuo (C6_BLQ <> 'R'), pedido emitido no periodo
+//   (C5_EMISSAO). Pedido sem nenhum item assim nao aparece.
+//   Resposta agrupada por pedido (cabecalho SC5 + itens SC6).
+//   - Cliente/loja = C5_CLIENTE/C5_LOJACLI (nome e grupo A1_GRPVEN -> ACY_DESCRI);
+//     cidade/UF = cliente de ENTREGA (C5_CLIENT/C5_LOJAENT).
+//   - Frete destacado = C5_FRETE (numerico); frete nao destacado = C5_ZFRETE
+//     (CARACTER): vai o texto original e o valor lido por ValTxt (aceita
+//     "1.234,56", "1234.56", "R$ 150,00").
+//   - Campos de logistica criados na SC5 em 11/2026 (C5_ZDTENV, C5_ZDTPREV,
+//     C5_ZDTENTR, C5_ZTPMAT, C5_ZCTE, C5_ZVLRCTE, C5_ZREENTR, C5_ZCTEREE,
+//     C5_ZVCTERE, C5_ZNDENT, C5_ZINDICA) e os opcionais C5_ZTPPEDI, C5_ZFRETE,
+//     C5_VOLUME1: conferidos no ALL_TAB_COLUMNS a cada consulta. Campo que nao
+//     existe vira ' ' na query (coluna inexistente derruba a thread do REST sem
+//     passar pelo Recover) e sai em "camposFaltando".
+//   - "opcoes": combos do SX3 (X3_CBOX) de C5_ZTPMAT, C5_ZINDICA, C5_ZREENTR e
+//     C5_ZTPPEDI, para a tela nao depender de lista fixa.
+//   - "transportadoras": SA4 inteira (codigo e nome), para a edicao.
+//
+// PUT /api/v1/vs-financial-data/logistica/pedidos/:recno  (R_E_C_N_O_ da SC5)
+//   Grava direto na SC5 com RecLock (sem MATA410: sem gatilho/validacao do
+//   SX3), so os campos enviados no corpo. Regras:
+//   - envio >= emissao do pedido; entrega exige envio e entrega >= envio;
+//   - campos de reentrega so com C5_ZREENTR = SIM (valor final);
+//   - transportadora, frete, volume e frete nao destacado so enquanto o
+//     pedido NAO tem nota (depois da NF esses dados ja sairam no documento);
+//   - combo: so codigo existente no X3_CBOX; texto no limite do TamSX3.
+//   Responde o pedido como o GET mostra, para a tela atualizar o cartao.
+//
+// Acesso: U_VSAPIACE(.T., "U_LOGRELAPP") (lista MV_VSAPUSR ou menu da tela).
+// O VSACESSO.tlpp (API-Acesso-main) precisa estar no RPO.
+// Fonte em ASCII puro e LF; texto com acento sai por EncodeUTF8 (TxtOut).
+// ============================================================================
+
+Namespace Videosoft.Logistica.Pedidos
+
+#define LG_VERSAO     "2026-11-13a"
+#define LG_DIAS_PADR  365
+#define LG_DIAS_MAX   1100
+
+/*/{Protheus.doc} getVsLogPedidos
+Pedidos de entrega (cabecalho + itens com TES de saida que movimenta estoque).
+@type function
+@author Romulo Garcia
+@since 13/11/2026
+@queryparam de, Character, opcional. AAAAMMDD. Default = hoje - 365 dias.
+@queryparam ate, Character, opcional. AAAAMMDD. Default = hoje.
+/*/
+@Get("/api/v1/vs-financial-data/logistica/pedidos")
+User Function getVsLogPedidos() as Logical
+   If !U_VSAPIACE(.T., "U_LOGRELAPP")
+      Return .T.
+   EndIf
+Return LerPedidos()
+
+Static Function LerPedidos()
+   Local jQuery      := Nil
+   Local jResp       := JsonObject():New()
+   Local jOpc        := JsonObject():New()
+   Local jRet        := Nil
+   Local bErrOld     := ErrorBlock({|oE| Break(oE) })
+   Local oErrCap     := Nil
+   Local cEtapa      := "00-inicio"
+   Local lRespondido := .F.
+   Local dDe         := CToD("")
+   Local dAte        := CToD("")
+   Local aFalta      := {}
+   Local aPed        := {}
+   Local cAlAberto   := ""
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      jQuery := oRest:getQueryRequest()
+      If ValType(jQuery) != "J" .and. ValType(jQuery) != "O"
+         jQuery := JsonObject():New()
+      EndIf
+
+      cEtapa := "01-parametros"
+      dAte := SToD(AllTrim(SStr(jQuery["ate"])))
+      If Empty(dAte)
+         dAte := Date()
+      EndIf
+      dDe := SToD(AllTrim(SStr(jQuery["de"])))
+      If Empty(dDe)
+         dDe := dAte - LG_DIAS_PADR
+      EndIf
+      If dDe > dAte .or. (dAte - dDe) > LG_DIAS_MAX
+         jRet := BuildErro(400, "PERIODO_INVALIDO", "Periodo invalido (de <= ate, maximo " + cValToChar(LG_DIAS_MAX) + " dias).")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      cEtapa := "02-pedidos"
+      aPed := ConsultaPedidos(dDe, dAte, "", @aFalta, @cEtapa, @cAlAberto)
+
+      cEtapa := "03-opcoes"
+      jOpc["tipoMaterial"] := OpcoesCombo("C5_ZTPMAT")
+      jOpc["indicador"]    := OpcoesCombo("C5_ZINDICA")
+      jOpc["reentrega"]    := OpcoesCombo("C5_ZREENTR")
+      jOpc["tipoPedido"]   := OpcoesCombo("C5_ZTPPEDI")
+
+      cEtapa := "04-resposta"
+      jResp["versao"]          := LG_VERSAO
+      jResp["geradoEm"]        := IsoOut(DToS(Date())) + " " + Time()
+      jResp["de"]              := IsoOut(dDe)
+      jResp["ate"]             := IsoOut(dAte)
+      jResp["camposFaltando"]  := aFalta
+      jResp["opcoes"]          := jOpc
+      jResp["tamanhos"]        := Tamanhos()
+      jResp["transportadoras"] := Transportadoras()
+      jResp["total"]           := Len(aPed)
+      jResp["pedidos"]         := aPed
+      jRet := oRest:setStatusResponse(200, jResp:ToJson())
+      lRespondido := .T.
+
+   Recover Using oErrCap
+      // SEMPRE fechar o cursor: vazamento esgota o pool e derruba outras APIs
+      If !Empty(cAlAberto) .and. Select(cAlAberto) > 0
+         (cAlAberto)->(DbCloseArea())
+      EndIf
+      oRest:setKeyHeaderResponse("X-Erro-Etapa", cEtapa)
+      If !lRespondido
+         jRet := BuildErro(500, "ERRO_INTERNO", "etapa=[" + cEtapa + "] " + TxtErro(oErrCap))
+         lRespondido := .T.
+      EndIf
+   End Sequence
+
+   ErrorBlock(bErrOld)
+   If !lRespondido
+      jRet := BuildErro(500, "ERRO_INTERNO", "Erro inesperado.")
+   EndIf
+Return jRet
+
+/*/{Protheus.doc} putVsLogPedido
+Grava os dados de logistica do pedido (SC5) pela tela LOGRELAPP.
+Campo ausente no corpo = nao altera; texto vazio limpa.
+@type function
+@author Romulo Garcia
+@since 13/11/2026
+@pathparam recno, Numeric, R_E_C_N_O_ da SC5 ("recno" do pedido no GET)
+@body {"dataEnvio": "AAAA-MM-DD", "dataPrevisao": "...", "dataEntrega": "...", "tipoMaterial": "T", "cte": "...", "valorCte": 0, "reentrega": "S"|"N"|"", "cteReentrega": "...", "valorCteReentrega": 0, "dataNovaEntrega": "...", "indicador": "1", "transportadora": "000001", "frete": 0, "volume": 0, "freteNaoDestacado": 0}
+/*/
+@Put("/api/v1/vs-financial-data/logistica/pedidos/:recno")
+User Function putVsLogPedido() as Logical
+   If !U_VSAPIACE(.T., "U_LOGRELAPP")
+      Return .T.
+   EndIf
+Return GravaPedido()
+
+Static Function GravaPedido()
+   Local jPath       := Nil
+   Local jBody       := JsonObject():New()
+   Local jRet        := Nil
+   Local xErrJson    := Nil
+   Local bErrOld     := ErrorBlock({|oE| Break(oE) })
+   Local oErrCap     := Nil
+   Local cEtapa      := "00-inicio"
+   Local lRespondido := .F.
+   Local lTravou     := .F.
+   Local nRecno      := 0
+   Local aMapa       := MapaCampos()
+   Local aGrava      := {}
+   Local aFalta      := {}
+   Local cChave      := ""
+   Local cCampo      := ""
+   Local cTipo       := ""
+   Local xVal        := Nil
+   Local cTxt        := ""
+   Local nI          := 0
+   Local nPos        := 0
+   Local lComercial  := .F.
+   Local lReeCampos  := .F.
+   Local cPedido     := ""
+   Local dEmis       := CToD("")
+   Local dEnv        := CToD("")
+   Local dEnt        := CToD("")
+   Local dNova       := CToD("")
+   Local cReent      := ""
+   Local aPed        := {}
+   Local aIgnora     := {}
+   Local cAlAberto   := ""
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      cEtapa := "01-parametros"
+      jPath := oRest:getPathParamsRequest()
+      If ValType(jPath) == "J" .or. ValType(jPath) == "O"
+         nRecno := Val(SStr(jPath["recno"]))
+      EndIf
+      If nRecno <= 0
+         jRet := BuildErro(400, "RECNO_INVALIDO", "Informe o recno do pedido.")
+         lRespondido := .T.
+         Break
+      EndIf
+      xErrJson := jBody:FromJson(SStr(oRest:getBodyRequest()))
+      If ValType(xErrJson) == "C"
+         jRet := BuildErro(400, "JSON_INVALIDO", "Corpo da requisicao nao e um JSON valido.")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      cEtapa := "02-pedido"
+      DbSelectArea("SC5")
+      SC5->(DbGoTo(nRecno))
+      If SC5->(Eof()) .or. SC5->(Deleted()) .or. SC5->C5_FILIAL != FWxFilial("SC5")
+         jRet := BuildErro(404, "PEDIDO_NAO_ENCONTRADO", "Pedido nao encontrado (excluido ou de outra filial).")
+         lRespondido := .T.
+         Break
+      EndIf
+      cPedido := SC5->C5_NUM
+      dEmis   := SC5->C5_EMISSAO
+
+      cEtapa := "03-campos"
+      For nI := 1 to Len(aMapa)
+         cChave := aMapa[nI][1]
+         cCampo := aMapa[nI][2]
+         cTipo  := aMapa[nI][3]
+         If !jBody:HasProperty(cChave)
+            Loop
+         EndIf
+         If SC5->(FieldPos(cCampo)) == 0
+            aAdd(aFalta, cCampo)
+            Loop
+         EndIf
+         If cTipo == "D"
+            cTxt := AllTrim(SStr(jBody[cChave]))
+            xVal := IsoIn(cTxt)
+            If !Empty(cTxt) .and. Empty(xVal)
+               jRet := BuildErro(400, "DATA_INVALIDA", cChave + ": data invalida (use AAAA-MM-DD).")
+               lRespondido := .T.
+               Break
+            EndIf
+         ElseIf cTipo == "N" .or. cTipo == "F"
+            xVal := NumIn(jBody[cChave])
+            If xVal < 0
+               jRet := BuildErro(400, "VALOR_INVALIDO", cChave + ": valor negativo.")
+               lRespondido := .T.
+               Break
+            EndIf
+            If cTipo == "F"
+               // C5_ZFRETE e CARACTER: grava com ponto decimal, legivel pelo Val()
+               // das outras APIs (RESTPEDIDOS usa NNum -> Val)
+               xVal := IIf(xVal == 0, "", AllTrim(Str(xVal, 16, 2)))
+            EndIf
+         ElseIf cTipo == "S"
+            cTxt := Upper(AllTrim(TxtIn(jBody[cChave])))
+            If !(cTxt $ "|S|N|")
+               jRet := BuildErro(400, "SIM_NAO_INVALIDO", cChave + " deve ser S, N ou vazio.")
+               lRespondido := .T.
+               Break
+            EndIf
+            xVal := ValorSimNao(cCampo, cTxt)
+         ElseIf cTipo == "B"
+            xVal := AllTrim(TxtIn(jBody[cChave]))
+            If !Empty(xVal) .and. !CodigoNoCombo(cCampo, xVal)
+               jRet := BuildErro(400, "OPCAO_INVALIDA", cChave + ": opcao [" + xVal + "] nao existe no combo do " + cCampo + ".")
+               lRespondido := .T.
+               Break
+            EndIf
+         ElseIf cTipo == "T"
+            xVal := AllTrim(TxtIn(jBody[cChave]))
+            If !Empty(xVal) .and. !ExisteTransp(xVal)
+               jRet := BuildErro(400, "TRANSPORTADORA_INVALIDA", "Transportadora " + xVal + " nao cadastrada (SA4).")
+               lRespondido := .T.
+               Break
+            EndIf
+         Else
+            xVal := AllTrim(TxtIn(jBody[cChave]))
+         EndIf
+         // texto maior que o campo
+         If ValType(xVal) == "C" .and. ValType(SC5->(FieldGet(FieldPos(cCampo)))) == "C" .and. Len(xVal) > TamSX3(cCampo)[1]
+            jRet := BuildErro(400, "TEXTO_GRANDE", cChave + " com mais de " + cValToChar(TamSX3(cCampo)[1]) + " caracteres.")
+            lRespondido := .T.
+            Break
+         EndIf
+         If aMapa[nI][4] == "COM"
+            lComercial := .T.
+         ElseIf aMapa[nI][4] == "REE" .and. !Empty(xVal)
+            lReeCampos := .T.
+         EndIf
+         aAdd(aGrava, {cCampo, xVal, cTipo})
+      Next nI
+
+      If Len(aFalta) > 0
+         jRet := BuildErro(400, "CAMPO_INEXISTENTE", "Campos ainda nao criados na SC5: " + ArrToTxt(aFalta) + ".")
+         lRespondido := .T.
+         Break
+      EndIf
+      If Len(aGrava) == 0
+         jRet := BuildErro(400, "SEM_CAMPOS", "Nenhum campo para gravar.")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      cEtapa := "04-regras"
+      // Valores finais = o que veio no corpo ou o que ja esta gravado
+      dEnv  := DataFinal(aGrava, "C5_ZDTENV")
+      dEnt  := DataFinal(aGrava, "C5_ZDTENTR")
+      dNova := DataFinal(aGrava, "C5_ZNDENT")
+      nPos  := aScan(aGrava, {|x| x[1] == "C5_ZREENTR"})
+      If nPos > 0
+         cReent := SimNao(aGrava[nPos][2])
+      ElseIf SC5->(FieldPos("C5_ZREENTR")) > 0
+         cReent := SimNao(SC5->(FieldGet(FieldPos("C5_ZREENTR"))))
+      EndIf
+      If !Empty(dEnv) .and. dEnv < dEmis
+         jRet := BuildErro(400, "ENVIO_ANTES_EMISSAO", "Data de envio (" + DToC(dEnv) + ") anterior a emissao do pedido (" + DToC(dEmis) + ").")
+         lRespondido := .T.
+         Break
+      EndIf
+      If !Empty(dEnt) .and. Empty(dEnv)
+         jRet := BuildErro(400, "ENTREGA_SEM_ENVIO", "Informe a data de envio antes da data de entrega.")
+         lRespondido := .T.
+         Break
+      EndIf
+      If !Empty(dEnt) .and. dEnt < dEnv
+         jRet := BuildErro(400, "ENTREGA_ANTES_ENVIO", "Data de entrega (" + DToC(dEnt) + ") anterior ao envio (" + DToC(dEnv) + ").")
+         lRespondido := .T.
+         Break
+      EndIf
+      If !Empty(dNova) .and. !Empty(dEnv) .and. dNova < dEnv
+         jRet := BuildErro(400, "NOVA_ENTREGA_ANTES_ENVIO", "Nova data de entrega (" + DToC(dNova) + ") anterior ao envio (" + DToC(dEnv) + ").")
+         lRespondido := .T.
+         Break
+      EndIf
+      If lReeCampos .and. cReent != "SIM"
+         jRet := BuildErro(400, "SEM_REENTREGA", "CTE, valor e nova data de reentrega so com Gerou reentrega = Sim.")
+         lRespondido := .T.
+         Break
+      EndIf
+      If lComercial .and. TemNota(cPedido)
+         jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, frete e volume nao podem mais ser alterados aqui.")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      cEtapa := "05-gravacao"
+      If !RecLock("SC5", .F.)
+         jRet := BuildErro(409, "PEDIDO_EM_USO", "Pedido " + AllTrim(cPedido) + " em uso por outro usuario. Tente de novo.")
+         lRespondido := .T.
+         Break
+      EndIf
+      lTravou := .T.
+      For nI := 1 to Len(aGrava)
+         nPos := SC5->(FieldPos(aGrava[nI][1]))
+         SC5->(FieldPut(nPos, Converte(aGrava[nI][2], ValType(SC5->(FieldGet(nPos))))))
+      Next nI
+      SC5->(MsUnlock())
+      lTravou := .F.
+
+      cEtapa := "06-resposta"
+      aPed := ConsultaPedidos(CToD(""), CToD(""), cPedido, @aIgnora, @cEtapa, @cAlAberto)
+      If Len(aPed) > 0
+         jRet := oRest:setStatusResponse(200, aPed[1]:ToJson())
+      Else
+         // gravou, mas o pedido nao passa no filtro da tela (sem item de saida com estoque)
+         jRet := oRest:setStatusResponse(200, '{"recno":' + cValToChar(nRecno) + ',"aviso":"gravado"}')
+      EndIf
+      lRespondido := .T.
+
+   Recover Using oErrCap
+      If lTravou
+         SC5->(MsUnlock())
+      EndIf
+      If !Empty(cAlAberto) .and. Select(cAlAberto) > 0
+         (cAlAberto)->(DbCloseArea())
+      EndIf
+      oRest:setKeyHeaderResponse("X-Erro-Etapa", cEtapa)
+      If !lRespondido
+         jRet := BuildErro(500, "ERRO_INTERNO", "etapa=[" + cEtapa + "] " + TxtErro(oErrCap))
+         lRespondido := .T.
+      EndIf
+   End Sequence
+
+   ErrorBlock(bErrOld)
+   If !lRespondido
+      jRet := BuildErro(500, "ERRO_INTERNO", "Erro inesperado.")
+   EndIf
+Return jRet
+
+// {chave do JSON, campo, tipo, grupo}
+// tipo: D data, N numero, F frete texto (C5_ZFRETE), S sim/nao (combo),
+//       B codigo de combo, T transportadora (SA4), C texto
+// grupo: LOG logistica, REE reentrega, COM comercial (so antes da nota)
+Static Function MapaCampos()
+   Local aMapa := {}
+   aAdd(aMapa, {"dataEnvio",         "C5_ZDTENV",  "D", "LOG"})
+   aAdd(aMapa, {"dataPrevisao",      "C5_ZDTPREV", "D", "LOG"})
+   aAdd(aMapa, {"dataEntrega",       "C5_ZDTENTR", "D", "LOG"})
+   aAdd(aMapa, {"tipoMaterial",      "C5_ZTPMAT",  "B", "LOG"})
+   aAdd(aMapa, {"cte",               "C5_ZCTE",    "C", "LOG"})
+   aAdd(aMapa, {"valorCte",          "C5_ZVLRCTE", "N", "LOG"})
+   aAdd(aMapa, {"reentrega",         "C5_ZREENTR", "S", "LOG"})
+   aAdd(aMapa, {"cteReentrega",      "C5_ZCTEREE", "C", "REE"})
+   aAdd(aMapa, {"valorCteReentrega", "C5_ZVCTERE", "N", "REE"})
+   aAdd(aMapa, {"dataNovaEntrega",   "C5_ZNDENT",  "D", "REE"})
+   aAdd(aMapa, {"indicador",         "C5_ZINDICA", "B", "LOG"})
+   aAdd(aMapa, {"transportadora",    "C5_TRANSP",  "T", "COM"})
+   aAdd(aMapa, {"frete",             "C5_FRETE",   "N", "COM"})
+   aAdd(aMapa, {"volume",            "C5_VOLUME1", "N", "COM"})
+   aAdd(aMapa, {"freteNaoDestacado", "C5_ZFRETE",  "F", "COM"})
+Return aMapa
+
+// Data final do campo: a do corpo, senao a gravada (campo inexistente = vazia)
+Static Function DataFinal(aGrava, cCampo)
+   Local nPos := aScan(aGrava, {|x| x[1] == cCampo})
+   Local xV   := Nil
+   If nPos > 0
+      Return aGrava[nPos][2]
+   EndIf
+   If SC5->(FieldPos(cCampo)) == 0
+      Return CToD("")
+   EndIf
+   xV := SC5->(FieldGet(FieldPos(cCampo)))
+   If ValType(xV) == "D"
+      Return xV
+   EndIf
+Return IsoIn(xV)
+
+// Valor validado -> tipo real do campo na SC5 (o tipo dos Z* nao foi conferido)
+Static Function Converte(xVal, cTipoCampo)
+   If cTipoCampo == "D"
+      If ValType(xVal) == "D"
+         Return xVal
+      EndIf
+      Return IsoIn(xVal)
+   ElseIf cTipoCampo == "N"
+      If ValType(xVal) == "N"
+         Return xVal
+      EndIf
+      Return ValTxt(SStr(xVal))
+   EndIf
+   // campo caracter
+   If ValType(xVal) == "D"
+      Return DToS(xVal)
+   ElseIf ValType(xVal) == "N"
+      Return IIf(xVal == 0, "", AllTrim(Str(xVal, 16, 2)))
+   EndIf
+Return SStr(xVal)
+
+// Algum item do pedido com nota real (C5_NOTA/C6_NOTA "XXX..." = residuo, nao e nota)
+Static Function TemNota(cPedido)
+   Local cQuery := ""
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   Local lRet   := .F.
+   cQuery := "SELECT COUNT(*) AS QTD FROM " + RetSqlName("SC6") + " SC6 "
+   cQuery += "WHERE SC6.C6_FILIAL = ? AND SC6.C6_NUM = ? AND SC6.C6_NOTA <> ' ' "
+   cQuery += "  AND SC6.C6_NOTA NOT LIKE 'X%' AND SC6.D_E_L_E_T_ = ' ' "
+   oStmt := FWExecStatement():New(cQuery)
+   oStmt:SetString(1, FWxFilial("SC6"))
+   oStmt:SetString(2, cPedido)
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      lRet := NNum((cAl)->QTD) > 0
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return lRet
+
+Static Function ExisteTransp(cCod)
+   Local lRet := .F.
+   DbSelectArea("SA4")
+   SA4->(DbSetOrder(1))
+   lRet := SA4->(DbSeek(FWxFilial("SA4") + cCod))
+Return lRet
+
+// ----------------------------------------------------------------------------
+// Consulta principal. cPedido preenchido = so esse pedido (ignora o periodo).
+// aFalta recebe os campos opcionais que nao existem na SC5.
+// ----------------------------------------------------------------------------
+Static Function ConsultaPedidos(dDe, dAte, cPedido, aFalta, cEtapa, cAlAberto)
+   Local aPed    := {}
+   Local lTemPed := .F.
+   Local cExist  := ColunasExistentes()
+   Local cQuery  := ""
+   Local cAlias  := GetNextAlias()
+   Local oStmt   := Nil
+   Local aBinds  := {}
+   Local nB      := 0
+   Local cAtual  := ""
+   Local jPed    := Nil
+   Local aItens  := {}
+   Local jIt     := Nil
+   Local cNota   := ""
+   Local aNotas  := {}
+   Local cDtFat  := ""
+   Local cFrTxt  := ""
+
+   aFalta := {}
+   cEtapa := "02a-query"
+   cQuery := "SELECT SC5.R_E_C_N_O_ AS RECSC5, SC5.C5_NUM AS PEDIDO, SC5.C5_EMISSAO AS EMISSAO, "
+   cQuery += "       SC5.C5_CLIENTE AS CLIENTE, SC5.C5_LOJACLI AS LOJA, SC5.C5_CLIENT AS CLIENT, SC5.C5_LOJAENT AS LOJAENT, "
+   cQuery += "       SC5.C5_FECENT AS FECENT, SC5.C5_VEND1 AS CODVEND, SC5.C5_TRANSP AS CODTRANSP, SC5.C5_FRETE AS FRETE, "
+   cQuery += "       SA1.A1_NOME AS NOME, SA1.A1_NREDUZ AS FANTASIA, SA1.A1_GRPVEN AS CODGRP, ACY.ACY_DESCRI AS GRUPO, "
+   cQuery += "       SAE.A1_NOME AS NOMEENT, SAE.A1_MUN AS CIDADE, SAE.A1_EST AS UF, "
+   cQuery += "       SA3.A3_NOME AS VENDEDOR, SA4.A4_NOME AS TRANSP, "
+   cQuery += "       " + ColOpc(cExist, "C5_ZTPPEDI", "TIPOPED", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZFRETE", "ZFRETE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_VOLUME1", "VOLUME", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZDTENV", "DTENV", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZDTPREV", "DTPREV", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZDTENTR", "DTENTR", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZTPMAT", "TPMAT", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZCTE", "CTE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZVLRCTE", "VLRCTE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZREENTR", "REENTR", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZCTEREE", "CTEREE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZVCTERE", "VCTERE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZNDENT", "NDENT", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ZINDICA", "INDICA", @aFalta) + ", "
+   cQuery += "       SC6.C6_ITEM AS ITEM, SC6.C6_PRODUTO AS PRODUTO, SC6.C6_DESCRI AS DESCRI, "
+   cQuery += "       SC6.C6_QTDVEN AS QTDVEN, SC6.C6_QTDENT AS QTDENT, SC6.C6_VALOR AS VALOR, "
+   cQuery += "       SC6.C6_TES AS TES, SF4.F4_TEXTO AS DESCTES, SC6.C6_NOTA AS NOTA, SC6.C6_SERIE AS SERIE, "
+   cQuery += "       SF2.F2_EMISSAO AS DTFAT "
+   cQuery += "FROM " + RetSqlName("SC6") + " SC6 "
+   cQuery += "INNER JOIN " + RetSqlName("SC5") + " SC5 ON SC5.C5_FILIAL = SC6.C6_FILIAL "
+   cQuery += "    AND SC5.C5_NUM = SC6.C6_NUM AND SC5.D_E_L_E_T_ = ' ' "
+   // TES de saida que movimenta estoque (filial exata para nao duplicar)
+   cQuery += "INNER JOIN " + RetSqlName("SF4") + " SF4 ON SF4.F4_FILIAL = '" + FWxFilial("SF4") + "' "
+   cQuery += "    AND SF4.F4_CODIGO = SC6.C6_TES AND SF4.F4_TIPO = 'S' AND SF4.F4_ESTOQUE = 'S' AND SF4.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA1") + " SA1 ON (SA1.A1_FILIAL = '" + FWxFilial("SA1") + "' OR SA1.A1_FILIAL = ' ') "
+   cQuery += "    AND SA1.A1_COD = SC5.C5_CLIENTE AND SA1.A1_LOJA = SC5.C5_LOJACLI AND SA1.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA1") + " SAE ON (SAE.A1_FILIAL = '" + FWxFilial("SA1") + "' OR SAE.A1_FILIAL = ' ') "
+   cQuery += "    AND SAE.A1_COD = SC5.C5_CLIENT AND SAE.A1_LOJA = SC5.C5_LOJAENT AND SAE.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("ACY") + " ACY ON (ACY.ACY_FILIAL = '" + FWxFilial("ACY") + "' OR ACY.ACY_FILIAL = ' ') "
+   cQuery += "    AND ACY.ACY_GRPVEN = SA1.A1_GRPVEN AND SA1.A1_GRPVEN <> ' ' AND ACY.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA3") + " SA3 ON (SA3.A3_FILIAL = '" + FWxFilial("SA3") + "' OR SA3.A3_FILIAL = ' ') "
+   cQuery += "    AND SA3.A3_COD = SC5.C5_VEND1 AND SA3.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SA4") + " SA4 ON (SA4.A4_FILIAL = '" + FWxFilial("SA4") + "' OR SA4.A4_FILIAL = ' ') "
+   cQuery += "    AND SA4.A4_COD = SC5.C5_TRANSP AND SC5.C5_TRANSP <> ' ' AND SA4.D_E_L_E_T_ = ' ' "
+   cQuery += "LEFT JOIN " + RetSqlName("SF2") + " SF2 ON (SF2.F2_FILIAL = '" + FWxFilial("SF2") + "' OR SF2.F2_FILIAL = ' ') "
+   cQuery += "    AND SF2.F2_DOC = SC6.C6_NOTA AND SF2.F2_SERIE = SC6.C6_SERIE AND SC6.C6_NOTA <> ' ' AND SF2.D_E_L_E_T_ = ' ' "
+   cQuery += "WHERE SC6.C6_FILIAL = ? AND SC6.D_E_L_E_T_ = ' ' AND SC6.C6_BLQ <> 'R' AND SC5.C5_TIPO = 'N' "
+   aAdd(aBinds, FWxFilial("SC6"))
+   If !Empty(cPedido)
+      cQuery += "  AND SC5.C5_NUM = ? "
+      aAdd(aBinds, cPedido)
+   Else
+      cQuery += "  AND SC5.C5_EMISSAO BETWEEN ? AND ? "
+      aAdd(aBinds, DToS(dDe))
+      aAdd(aBinds, DToS(dAte))
+   EndIf
+   cQuery += "ORDER BY SC5.C5_NUM, SC6.C6_ITEM "
+
+   oStmt := FWExecStatement():New(cQuery)
+   For nB := 1 to Len(aBinds)
+      oStmt:SetString(nB, aBinds[nB])
+   Next nB
+   cAlias := oStmt:OpenAlias(cAlias)
+   If Empty(cAlias) .or. Select(cAlias) == 0
+      oStmt:Destroy()
+      UserException("Nao foi possivel executar a consulta dos pedidos.")
+   EndIf
+   // o Recover de quem chamou fecha o cursor se der erro no meio da leitura
+   cAlAberto := cAlias
+
+   cEtapa := "02b-cursor"
+   Do While !(cAlias)->(Eof())
+      If (cAlias)->PEDIDO != cAtual
+         If lTemPed
+            FechaPedido(jPed, aItens, aNotas, cDtFat)
+            aAdd(aPed, jPed)
+         EndIf
+         lTemPed := .T.
+         cAtual := (cAlias)->PEDIDO
+         aItens := {}
+         aNotas := {}
+         cDtFat := ""
+         jPed := JsonObject():New()
+         jPed["recno"]             := NNum((cAlias)->RECSC5)
+         jPed["pedido"]            := AllTrim((cAlias)->PEDIDO)
+         jPed["emissao"]           := IsoOut((cAlias)->EMISSAO)
+         jPed["cliente"]           := AllTrim(SStr((cAlias)->CLIENTE))
+         jPed["loja"]              := AllTrim(SStr((cAlias)->LOJA))
+         jPed["nome"]              := TxtOut((cAlias)->NOME)
+         jPed["fantasia"]          := TxtOut((cAlias)->FANTASIA)
+         jPed["grupo"]             := TxtOut((cAlias)->GRUPO)
+         jPed["clienteEntrega"]    := AllTrim(SStr((cAlias)->CLIENT)) + "/" + AllTrim(SStr((cAlias)->LOJAENT))
+         jPed["nomeEntrega"]       := TxtOut((cAlias)->NOMEENT)
+         jPed["cidade"]            := TxtOut((cAlias)->CIDADE)
+         jPed["uf"]                := AllTrim(SStr((cAlias)->UF))
+         jPed["vendedor"]          := TxtOut((cAlias)->VENDEDOR)
+         jPed["codVendedor"]       := AllTrim(SStr((cAlias)->CODVEND))
+         jPed["tipoPedido"]        := AllTrim(SStr((cAlias)->TIPOPED))
+         jPed["previsaoSaida"]     := IsoOut((cAlias)->FECENT)
+         jPed["transportadora"]    := AllTrim(SStr((cAlias)->CODTRANSP))
+         jPed["transportadoraNome"]:= TxtOut((cAlias)->TRANSP)
+         jPed["frete"]             := NNum((cAlias)->FRETE)
+         cFrTxt := AllTrim(cValToChar((cAlias)->ZFRETE))
+         jPed["freteNaoDestacadoTexto"] := TxtOut(cFrTxt)
+         jPed["freteNaoDestacado"] := ValTxt(cFrTxt)
+         jPed["volume"]            := NNum((cAlias)->VOLUME)
+         jPed["dataEnvio"]         := IsoOut((cAlias)->DTENV)
+         jPed["dataPrevisao"]      := IsoOut((cAlias)->DTPREV)
+         jPed["dataEntrega"]       := IsoOut((cAlias)->DTENTR)
+         jPed["tipoMaterial"]      := AllTrim(cValToChar((cAlias)->TPMAT))
+         jPed["cte"]               := TxtOut(cValToChar((cAlias)->CTE))
+         jPed["valorCte"]          := NNum((cAlias)->VLRCTE)
+         jPed["reentrega"]         := SimNao((cAlias)->REENTR)
+         jPed["cteReentrega"]      := TxtOut(cValToChar((cAlias)->CTEREE))
+         jPed["valorCteReentrega"] := NNum((cAlias)->VCTERE)
+         jPed["dataNovaEntrega"]   := IsoOut((cAlias)->NDENT)
+         jPed["indicador"]         := AllTrim(cValToChar((cAlias)->INDICA))
+      EndIf
+
+      jIt := JsonObject():New()
+      cNota := AllTrim(SStr((cAlias)->NOTA))
+      If Left(cNota, 1) == "X"
+         cNota := ""
+      EndIf
+      jIt["item"]        := AllTrim((cAlias)->ITEM)
+      jIt["produto"]     := AllTrim((cAlias)->PRODUTO)
+      jIt["descricao"]   := TxtOut((cAlias)->DESCRI)
+      jIt["quantidade"]  := NNum((cAlias)->QTDVEN)
+      jIt["entregue"]    := NNum((cAlias)->QTDENT)
+      jIt["valor"]       := Round(NNum((cAlias)->VALOR), 2)
+      jIt["tes"]         := AllTrim(SStr((cAlias)->TES))
+      jIt["descTes"]     := TxtOut((cAlias)->DESCTES)
+      jIt["nota"]        := cNota
+      jIt["serie"]       := IIf(Empty(cNota), "", AllTrim(SStr((cAlias)->SERIE)))
+      jIt["dataFat"]     := IIf(Empty(cNota), "", IsoOut((cAlias)->DTFAT))
+      aAdd(aItens, jIt)
+      If !Empty(cNota) .and. aScan(aNotas, {|x| x == cNota}) == 0
+         aAdd(aNotas, cNota)
+      EndIf
+      If !Empty(jIt["dataFat"]) .and. jIt["dataFat"] > cDtFat
+         cDtFat := jIt["dataFat"]
+      EndIf
+      (cAlias)->(DbSkip())
+   EndDo
+   (cAlias)->(DbCloseArea())
+   oStmt:Destroy()
+   cAlAberto := ""
+   If lTemPed
+      FechaPedido(jPed, aItens, aNotas, cDtFat)
+      aAdd(aPed, jPed)
+   EndIf
+Return aPed
+
+Static Function FechaPedido(jPed, aItens, aNotas, cDtFat)
+   jPed["itens"]       := aItens
+   jPed["notas"]       := aNotas
+   jPed["dataFaturamento"] := cDtFat
+Return
+
+// "SC5.C5_X AS APELIDO" se o campo existe; senao "' ' AS APELIDO" e anota em aFalta
+Static Function ColOpc(cExist, cCampo, cApelido, aFalta)
+   If ("|" + cCampo + "|") $ cExist
+      Return "SC5." + cCampo + " AS " + cApelido
+   EndIf
+   aAdd(aFalta, cCampo)
+Return "' ' AS " + cApelido
+
+// "|C5_X|C5_Y|..." com as colunas fisicas da SC5 (ALL_TAB_COLUMNS)
+Static Function ColunasExistentes()
+   Local cRet  := "|"
+   Local cAl   := GetNextAlias()
+   Local oStmt := FWExecStatement():New("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ?")
+   oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      Do While !(cAl)->(Eof())
+         cRet += AllTrim((cAl)->COLUMN_NAME) + "|"
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return cRet
+
+// [[codigo, descricao], ...] do X3_CBOX (ex.: "T=Terminal;P=Periferico")
+Static Function OpcoesCombo(cCampo)
+   Local aRet  := {}
+   Local cBox  := ""
+   Local aOpc  := {}
+   Local nI    := 0
+   Local nPos  := 0
+   cBox := AllTrim(SStr(GetSX3Cache(cCampo, "X3_CBOX")))
+   If Empty(cBox)
+      Return aRet
+   EndIf
+   aOpc := StrTokArr(cBox, ";")
+   For nI := 1 to Len(aOpc)
+      nPos := At("=", aOpc[nI])
+      If nPos > 0
+         aAdd(aRet, {AllTrim(SubStr(aOpc[nI], 1, nPos - 1)), TxtOut(AllTrim(SubStr(aOpc[nI], nPos + 1)))})
+      EndIf
+   Next nI
+Return aRet
+
+Static Function CodigoNoCombo(cCampo, cCod)
+   Local aOpc := OpcoesCombo(cCampo)
+   If Len(aOpc) == 0
+      Return .T.
+   EndIf
+Return aScan(aOpc, {|x| x[1] == cCod}) > 0
+
+// Valor gravado no campo SIM/NAO conforme o combo do SX3 ("S=Sim;N=Nao" ou
+// "1=Sim;2=Nao"): opcao cujo texto comeca com S (sim) ou N (nao). Sem combo,
+// grava o proprio S/N. Vazio limpa o campo. (mesma regra do RESTPCPREL)
+Static Function ValorSimNao(cCampo, cSN)
+   Local cBox  := ""
+   Local aOpc  := {}
+   Local nI    := 0
+   Local nPos  := 0
+   If Empty(cSN)
+      Return ""
+   EndIf
+   cBox := AllTrim(SStr(GetSX3Cache(cCampo, "X3_CBOX")))
+   If Empty(cBox)
+      Return cSN
+   EndIf
+   aOpc := StrTokArr(cBox, ";")
+   For nI := 1 to Len(aOpc)
+      nPos := At("=", aOpc[nI])
+      If nPos > 0 .and. Upper(SubStr(AllTrim(SubStr(aOpc[nI], nPos + 1)), 1, 1)) == cSN
+         Return AllTrim(SubStr(aOpc[nI], 1, nPos - 1))
+      EndIf
+   Next nI
+Return cSN
+
+// Tamanho dos campos de texto (a tela limita a digitacao)
+Static Function Tamanhos()
+   Local jT    := JsonObject():New()
+   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP"}
+   Local nI    := 0
+   DbSelectArea("SC5")
+   For nI := 1 to Len(aCpos)
+      If SC5->(FieldPos(aCpos[nI])) > 0
+         jT[aCpos[nI]] := TamSX3(aCpos[nI])[1]
+      EndIf
+   Next nI
+Return jT
+
+// [[codigo, nome], ...] da SA4
+Static Function Transportadoras()
+   Local aRet   := {}
+   Local cQuery := ""
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   cQuery := "SELECT A4_COD, A4_NOME FROM " + RetSqlName("SA4") + " "
+   cQuery += "WHERE (A4_FILIAL = ? OR A4_FILIAL = ' ') AND D_E_L_E_T_ = ' ' ORDER BY A4_NOME "
+   oStmt := FWExecStatement():New(cQuery)
+   oStmt:SetString(1, FWxFilial("SA4"))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      Do While !(cAl)->(Eof())
+         aAdd(aRet, {AllTrim((cAl)->A4_COD), TxtOut((cAl)->A4_NOME)})
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return aRet
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+// Texto de valor -> numero: "1.234,56", "1234.56", "R$ 150,00", "150" (vazio = 0)
+Static Function ValTxt(cTxt)
+   Local cV := Upper(AllTrim(SStr(cTxt)))
+   cV := StrTran(cV, "R$", "")
+   cV := StrTran(cV, " ", "")
+   If Empty(cV)
+      Return 0
+   EndIf
+   If "," $ cV
+      cV := StrTran(cV, ".", "")
+      cV := StrTran(cV, ",", ".")
+   EndIf
+Return Val(cV)
+
+// Numero vindo da tela (numero ou texto)
+Static Function NumIn(xV)
+   If ValType(xV) == "N"
+      Return xV
+   ElseIf ValType(xV) == "C"
+      Return ValTxt(xV)
+   EndIf
+Return 0
+
+Static Function ArrToTxt(aArr)
+   Local cRet := ""
+   Local nI   := 0
+   For nI := 1 to Len(aArr)
+      cRet += IIf(nI > 1, ", ", "") + aArr[nI]
+   Next nI
+Return cRet
+
+Static Function SimNao(xValor)
+   Local cVal := Upper(AllTrim(cValToChar(xValor)))
+   If Empty(cVal)
+      Return ""
+   EndIf
+Return IIf(cVal $ "S|1|SIM", "SIM", "NAO")
+
+// "AAAA-MM-DD" (ou AAAAMMDD) da tela -> data; invalida/ausente = data vazia
+Static Function IsoIn(xV)
+   Local cV := StrTran(AllTrim(SStr(xV)), "-", "")
+   Local dV := CToD("")
+   If Len(cV) == 8
+      dV := SToD(cV)
+   EndIf
+Return dV
+
+// Texto vindo da tela (UTF-8) para gravar no banco (CP1252)
+Static Function TxtIn(xV)
+   Local cV := ""
+   Local cD := Nil
+   If ValType(xV) == "N"
+      Return cValToChar(xV)
+   ElseIf ValType(xV) != "C"
+      Return ""
+   EndIf
+   cV := xV
+   cD := DecodeUTF8(cV)
+Return IIf(ValType(cD) == "C", cD, cV)
+
+Static Function BuildErro(nStatus, cCod, cMsg)
+   Local jE := JsonObject():New()
+   jE["error"] := JsonObject():New()
+   jE["error"]["code"]    := cCod
+   jE["error"]["message"] := cMsg
+   // corpo de status >= 500 e descartado pelo framework: a mensagem vai no header
+   oRest:setKeyHeaderResponse("X-Erro", cMsg)
+Return oRest:setStatusResponse(nStatus, jE:ToJson())
+
+// sem Begin Sequence aqui dentro: e chamada no Recover
+Static Function TxtErro(oErr)
+   If ValType(oErr) == "O"
+      Return AllTrim(SStr(oErr:Description))
+   EndIf
+Return "erro sem descricao"
+
+Static Function SStr(xV)
+   If ValType(xV) == "C"
+      Return xV
+   EndIf
+Return ""
+
+Static Function NNum(xV)
+   If ValType(xV) == "N"
+      Return xV
+   ElseIf ValType(xV) == "C" .and. !Empty(xV)
+      Return ValTxt(xV)
+   EndIf
+Return 0
+
+Static Function IsoOut(xV)
+   Local c := ""
+   If ValType(xV) == "D"
+      c := DToS(xV)
+   Else
+      c := AllTrim(SStr(xV))
+   EndIf
+   If Len(c) != 8
+      Return ""
+   EndIf
+Return SubStr(c, 1, 4) + "-" + SubStr(c, 5, 2) + "-" + SubStr(c, 7, 2)
+
+Static Function TxtOut(xV)
+   Local cV := ""
+   If ValType(xV) != "C"
+      Return ""
+   EndIf
+   cV := AllTrim(xV)
+   If Empty(cV)
+      Return ""
+   EndIf
+Return EncodeUTF8(cV)

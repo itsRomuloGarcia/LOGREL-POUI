@@ -1,0 +1,8 @@
+{
+    "name":  "logrel",
+    "version":  "1.0.0",
+    "serverBackend":  "",
+    "restEntryPoint":  "",
+    "productLine":  "Protheus",
+    "restLogrel":  "https://atmsolucoes199578.protheus.cloudtotvs.com.br:10407/rest"
+}
