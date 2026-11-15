@@ -10,7 +10,7 @@ export type Destino = keyof PedidoEdicao | 'pedido' | '';
 export const DESTINOS: [Destino, string][] = [
   ['', '(ignorar)'],
   ['pedido', 'Pedido'],
-  ['previsaoSaida', 'Data de saída (C5_FECENT)'],
+  ['previsaoSaida', 'Saída programada (C5_FECENT)'],
   ['dataEnvio', 'Data de envio'],
   ['dataPrevisao', 'Previsão de entrega'],
   ['dataEntrega', 'Data de entrega'],
@@ -29,11 +29,15 @@ export const DESTINOS: [Destino, string][] = [
   ['frete', 'Frete destacado'],
   ['volume', 'Volume'],
   ['freteNaoDestacado', 'Frete não destacado'],
+  ['especie', 'Espécie'],
+  ['pesoLiquido', 'Peso líquido'],
+  ['pesoBruto', 'Peso bruto'],
+  ['obsEntrega', 'Observações da entrega'],
 ];
 
 /** Campos que a planilha atualiza (definido pelo usuario em 13/11/2026; CTE da
  *  reentrega incluido na 2a rodada). Os outros (nova data da reentrega,
- *  transportadora, frete, volume e frete nao destacado) so pela gaveta: a coluna
+ *  transportadora, volume, especie e pesos) so pela gaveta, e o frete so consulta: a coluna
  *  com esse titulo e ignorada. A nova data sai da data de entrega (painel.ts). */
 const DA_PLANILHA = new Set<Destino>(['pedido', 'dataEnvio', 'dataPrevisao', 'dataEntrega', 'tipoMaterial', 'cte', 'valorCte', 'reentrega', 'cteReentrega', 'valorCteReentrega', 'indicador']);
 
@@ -66,6 +70,9 @@ const REGRAS: [Destino, (n: string) => boolean][] = [
   ['indicador', (n) => tem(n, 'indicador') || tem(n, 'motivo') || tem(n, 'atraso')],
   ['transportadora', (n) => tem(n, 'transp')],
   ['volume', (n) => tem(n, 'volume') || n === 'vol'],
+  ['pesoBruto', (n) => tem(n, 'peso') && tem(n, 'brut')],
+  ['pesoLiquido', (n) => tem(n, 'peso')],
+  ['especie', (n) => tem(n, 'especie')],
   ['pedido', (n) => tem(n, 'pedido') || tem(n, 'pv') || n === 'num' || n === 'numero'],
 ];
 

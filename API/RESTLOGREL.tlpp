@@ -33,7 +33,7 @@
 //   - Campos de logistica criados na SC5 em 11/2026 (C5_ZDTENV, C5_ZDTPREV,
 //     C5_ZDTENTR, C5_ZTPMAT, C5_ZCTE, C5_ZVLRCTE, C5_ZREENTR, C5_ZCTEREE,
 //     C5_ZVCTERE, C5_ZNDENT, C5_ZINDICA) e os opcionais C5_ZTPPEDI, C5_ZFRETE,
-//     C5_VOLUME1: conferidos no ALL_TAB_COLUMNS a cada consulta. Campo que nao
+//     C5_VOLUME1, C5_ESPECI1, C5_PESOL, C5_PBRUTO: conferidos no ALL_TAB_COLUMNS a cada consulta. Campo que nao
 //     existe vira ' ' na query (coluna inexistente derruba a thread do REST sem
 //     passar pelo Recover) e sai em "camposFaltando".
 //   - Retorno a empresa (2026-11-13e): C5_ZDTRET (data), C5_ZMOTRET (combo:
@@ -49,12 +49,20 @@
 //   SX3), so os campos enviados no corpo. Regras:
 //   - envio >= emissao do pedido; entrega exige envio e entrega >= envio;
 //   - campos de reentrega so com C5_ZREENTR = SIM (valor final);
-//   - C5_FECENT ("previsaoSaida", data de saida): preenchido sem dataEnvio no
-//     corpo, grava tambem C5_ZDTENV com a mesma data (2026-11-13f);
+//   - C5_FECENT ("previsaoSaida") e a SAIDA PROGRAMADA (aba Programacao da
+//     tela). Desde 2026-11-15b NAO copia mais para o envio (C5_ZDTENV): o
+//     envio so e gravado quando o pedido sai de fato (pedido do usuario). A
+//     copia existiu de 2026-11-13f a 2026-11-15a;
+//   - C5_ZOBS ("obsEntrega"): observacoes da entrega, texto livre. Caracter ou
+//     memo: a leitura sai pelo tipo da coluna no Oracle (ObsSql) e a gravacao
+//     de memo nao passa pelo limite de tamanho;
 //   - retorno exige envio e retorno >= envio; motivo e pedido do reenvio so
 //     com data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
-//   - transportadora, frete, volume e frete nao destacado so enquanto o
-//     pedido NAO tem nota (depois da NF esses dados ja sairam no documento);
+//   - transportadora, volume, especie (C5_ESPECI1), peso liquido (C5_PESOL) e
+//     peso bruto (C5_PBRUTO) so enquanto o pedido NAO tem nota: sao dados da
+//     NF-e e tem que estar no pedido antes da emissao (depois ja sairam no
+//     documento). Frete destacado (C5_FRETE) e nao destacado (C5_ZFRETE) NAO
+//     sao gravados por aqui desde 2026-11-15a: so consulta (pedido do usuario);
 //   - combo: so codigo existente no X3_CBOX; texto no limite do TamSX3.
 //   Responde o pedido como o GET mostra, para a tela atualizar o cartao.
 //
@@ -65,7 +73,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-13f"
+#define LG_VERSAO     "2026-11-15b"
 #define LG_DIAS_PADR  365
 #define LG_DIAS_MAX   1100
 #define LG_BUSCA_MAX  500
@@ -173,7 +181,7 @@ Campo ausente no corpo = nao altera; texto vazio limpa.
 @author Romulo Garcia
 @since 13/11/2026
 @pathparam recno, Numeric, R_E_C_N_O_ da SC5 ("recno" do pedido no GET)
-@body {"previsaoSaida": "AAAA-MM-DD", "dataEnvio": "AAAA-MM-DD", "dataPrevisao": "...", "dataEntrega": "...", "tipoMaterial": "T", "cte": "...", "valorCte": 0, "reentrega": "S"|"N"|"", "cteReentrega": "...", "valorCteReentrega": 0, "dataNovaEntrega": "...", "indicador": "1", "dataRetorno": "...", "motivoRetorno": "1", "pedidoReenvio": "003500", "transportadora": "000001", "frete": 0, "volume": 0, "freteNaoDestacado": 0}
+@body {"previsaoSaida": "AAAA-MM-DD", "dataEnvio": "AAAA-MM-DD", "dataPrevisao": "...", "dataEntrega": "...", "tipoMaterial": "T", "cte": "...", "valorCte": 0, "reentrega": "S"|"N"|"", "cteReentrega": "...", "valorCteReentrega": 0, "dataNovaEntrega": "...", "indicador": "1", "dataRetorno": "...", "motivoRetorno": "1", "pedidoReenvio": "003500", "transportadora": "000001", "volume": 0, "especie": "CAIXA", "pesoLiquido": 0, "pesoBruto": 0}
 /*/
 @Put("/api/v1/vs-financial-data/logistica/pedidos/:recno")
 User Function putVsLogPedido() as Logical
@@ -323,9 +331,14 @@ Static Function GravaPedido()
             EndIf
          Else
             xVal := AllTrim(TxtIn(jBody[cChave]))
+            If cCampo == "C5_ZOBS"
+               // quebra de linha: CRLF no memo; espaco no campo caracter
+               xVal := StrTran(StrTran(xVal, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
+               xVal := StrTran(xVal, Chr(10), IIf(TamSX3(cCampo)[3] == "M", Chr(13) + Chr(10), " "))
+            EndIf
          EndIf
-         // texto maior que o campo
-         If ValType(xVal) == "C" .and. ValType(SC5->(FieldGet(FieldPos(cCampo)))) == "C" .and. Len(xVal) > TamSX3(cCampo)[1]
+         // texto maior que o campo (memo nao tem limite)
+         If ValType(xVal) == "C" .and. ValType(SC5->(FieldGet(FieldPos(cCampo)))) == "C" .and. TamSX3(cCampo)[3] != "M" .and. Len(xVal) > TamSX3(cCampo)[1]
             jRet := BuildErro(400, "TEXTO_GRANDE", cChave + " com mais de " + cValToChar(TamSX3(cCampo)[1]) + " caracteres.")
             lRespondido := .T.
             Break
@@ -352,11 +365,6 @@ Static Function GravaPedido()
       EndIf
 
       cEtapa := "04-regras"
-      // Data de saida (C5_FECENT) preenchida sem a data de envio no corpo: o envio recebe a mesma data
-      nPos := aScan(aGrava, {|x| x[1] == "C5_FECENT"})
-      If nPos > 0 .and. !Empty(aGrava[nPos][2]) .and. aScan(aGrava, {|x| x[1] == "C5_ZDTENV"}) == 0 .and. SC5->(FieldPos("C5_ZDTENV")) > 0
-         aAdd(aGrava, {"C5_ZDTENV", aGrava[nPos][2], "D"})
-      EndIf
       // Valores finais = o que veio no corpo ou o que ja esta gravado
       dEnv  := DataFinal(aGrava, "C5_ZDTENV")
       dEnt  := DataFinal(aGrava, "C5_ZDTENTR")
@@ -409,7 +417,7 @@ Static Function GravaPedido()
          Break
       EndIf
       If lComercial .and. TemNota(cPedido)
-         jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, frete e volume nao podem mais ser alterados aqui.")
+         jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, volume, especie e pesos nao podem mais ser alterados aqui.")
          lRespondido := .T.
          Break
       EndIf
@@ -590,10 +598,14 @@ Static Function MapaCampos()
    aAdd(aMapa, {"dataRetorno",       "C5_ZDTRET",  "D", "LOG"})
    aAdd(aMapa, {"motivoRetorno",     "C5_ZMOTRET", "B", "RET"})
    aAdd(aMapa, {"pedidoReenvio",     "C5_ZPEDREN", "P", "RET"})
+   aAdd(aMapa, {"obsEntrega",        "C5_ZOBS",    "C", "LOG"})
    aAdd(aMapa, {"transportadora",    "C5_TRANSP",  "T", "COM"})
-   aAdd(aMapa, {"frete",             "C5_FRETE",   "N", "COM"})
    aAdd(aMapa, {"volume",            "C5_VOLUME1", "N", "COM"})
-   aAdd(aMapa, {"freteNaoDestacado", "C5_ZFRETE",  "F", "COM"})
+   aAdd(aMapa, {"especie",           "C5_ESPECI1", "C", "COM"})
+   aAdd(aMapa, {"pesoLiquido",       "C5_PESOL",   "N", "COM"})
+   aAdd(aMapa, {"pesoBruto",         "C5_PBRUTO",  "N", "COM"})
+   // frete destacado (C5_FRETE) e nao destacado (C5_ZFRETE): so consulta
+   // desde 2026-11-15a (pedido do usuario); o GET continua mandando
 Return aMapa
 
 // Data final do campo: a do corpo, senao a gravada (campo inexistente = vazia)
@@ -724,6 +736,9 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ZTPPEDI", "TIPOPED", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZFRETE", "ZFRETE", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_VOLUME1", "VOLUME", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_ESPECI1", "ESPECIE", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_PESOL", "PESOL", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_PBRUTO", "PBRUTO", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTENV", "DTENV", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTPREV", "DTPREV", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTENTR", "DTENTR", @aFalta) + ", "
@@ -738,6 +753,7 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ZDTRET", "DTRET", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZMOTRET", "MOTRET", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZPEDREN", "PEDREN", @aFalta) + ", "
+   cQuery += "       " + ObsSql(cExist, @aFalta) + " AS OBSENT, "
    cQuery += "       SC6.C6_ITEM AS ITEM, SC6.C6_PRODUTO AS PRODUTO, SC6.C6_DESCRI AS DESCRI, "
    cQuery += "       SC6.C6_QTDVEN AS QTDVEN, SC6.C6_QTDENT AS QTDENT, SC6.C6_VALOR AS VALOR, "
    cQuery += "       SC6.C6_TES AS TES, SF4.F4_TEXTO AS DESCTES, SC6.C6_NOTA AS NOTA, SC6.C6_SERIE AS SERIE, "
@@ -844,6 +860,9 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["freteNaoDestacadoTexto"] := TxtOut(cFrTxt)
          jPed["freteNaoDestacado"] := ValTxt(cFrTxt)
          jPed["volume"]            := NNum((cAlias)->VOLUME)
+         jPed["especie"]           := TxtOut(cValToChar((cAlias)->ESPECIE))
+         jPed["pesoLiquido"]       := NNum((cAlias)->PESOL)
+         jPed["pesoBruto"]         := NNum((cAlias)->PBRUTO)
          jPed["dataEnvio"]         := IsoOut((cAlias)->DTENV)
          jPed["dataPrevisao"]      := IsoOut((cAlias)->DTPREV)
          jPed["dataEntrega"]       := IsoOut((cAlias)->DTENTR)
@@ -858,6 +877,7 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["dataRetorno"]       := IsoOut((cAlias)->DTRET)
          jPed["motivoRetorno"]     := AllTrim(cValToChar((cAlias)->MOTRET))
          jPed["pedidoReenvio"]     := AllTrim(cValToChar((cAlias)->PEDREN))
+         jPed["obsEntrega"]        := TxtOut(cValToChar((cAlias)->OBSENT))
       EndIf
 
       jIt := JsonObject():New()
@@ -907,6 +927,31 @@ Static Function ColOpc(cExist, cCampo, cApelido, aFalta)
    EndIf
    aAdd(aFalta, cCampo)
 Return "' ' AS " + cApelido
+
+// C5_ZOBS (observacoes da entrega) na query, pelo tipo da coluna no Oracle:
+// memo real fica em BLOB/CLOB e nao sai direto num SELECT (2026-11-15b)
+Static Function ObsSql(cExist, aFalta)
+   Local cTipo := ""
+   Local cAl   := GetNextAlias()
+   Local oStmt := Nil
+   If !("|C5_ZOBS|" $ cExist)
+      aAdd(aFalta, "C5_ZOBS")
+      Return "' '"
+   EndIf
+   oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = 'C5_ZOBS'")
+   oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      cTipo := Upper(AllTrim((cAl)->DATA_TYPE))
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+   If cTipo == "BLOB"
+      Return "NVL(UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(SC5.C5_ZOBS, 2000, 1)), ' ')"
+   ElseIf cTipo == "CLOB" .or. cTipo == "NCLOB"
+      Return "NVL(DBMS_LOB.SUBSTR(SC5.C5_ZOBS, 2000, 1), ' ')"
+   EndIf
+Return "SC5.C5_ZOBS"
 
 // "|C5_X|C5_Y|..." com as colunas fisicas da SC5 (ALL_TAB_COLUMNS)
 Static Function ColunasExistentes()
@@ -979,11 +1024,12 @@ Return cSN
 // Tamanho dos campos de texto (a tela limita a digitacao)
 Static Function Tamanhos()
    Local jT    := JsonObject():New()
-   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP"}
+   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP", "C5_ESPECI1", "C5_ZOBS"}
    Local nI    := 0
    DbSelectArea("SC5")
    For nI := 1 to Len(aCpos)
-      If SC5->(FieldPos(aCpos[nI])) > 0
+      // memo (C5_ZOBS pode ser) nao tem tamanho: a tela nao limita
+      If SC5->(FieldPos(aCpos[nI])) > 0 .and. TamSX3(aCpos[nI])[3] != "M"
          jT[aCpos[nI]] := TamSX3(aCpos[nI])[1]
       EndIf
    Next nI

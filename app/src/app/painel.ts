@@ -16,6 +16,8 @@ export interface Api {
   mensagemErro(e: unknown): string;
   diagnostico(): Promise<string>;
   fechar: (() => void) | null;
+  /** DANFE / carta de correcao pela SPEDNFE (so dentro do Protheus; false = sem canal) */
+  nota: ((acao: 'danfe' | 'cce', d: { nota: string; serie: string; pedido: string }) => boolean) | null;
 }
 
 // ---------- regras ----------
@@ -80,10 +82,20 @@ const CAMPO: Record<keyof PedidoEdicao, string> = {
   frete: 'C5_FRETE',
   volume: 'C5_VOLUME1',
   freteNaoDestacado: 'C5_ZFRETE',
+  especie: 'C5_ESPECI1',
+  pesoLiquido: 'C5_PESOL',
+  pesoBruto: 'C5_PBRUTO',
+  obsEntrega: 'C5_ZOBS',
 };
-const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado'];
+const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado', 'pesoLiquido', 'pesoBruto'];
 const REENTREGA: (keyof PedidoEdicao)[] = ['cteReentrega', 'valorCteReentrega', 'dataNovaEntrega'];
-const COMERCIAIS: (keyof PedidoEdicao)[] = ['transportadora', 'frete', 'volume', 'freteNaoDestacado'];
+/** Dados do pedido que vao para a NF-e: so editam antes da nota (frete destacado e
+ *  nao destacado sao so consulta desde 15/11/2026, pedido do usuario) */
+const COMERCIAIS: (keyof PedidoEdicao)[] = ['transportadora', 'volume', 'especie', 'pesoLiquido', 'pesoBruto'];
+/** Tem que estar preenchidos antes da emissao da NF-e (pedido do usuario, 15/11/2026) */
+const PARA_NFE: (keyof PedidoEdicao)[] = ['especie', 'pesoLiquido', 'pesoBruto'];
+/** Peso com ate 4 casas (C5_PESOL/C5_PBRUTO), sem zeros a mais */
+const pesoTxt = (n: number | undefined) => (n ? n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 4 }) : '');
 /** So valem com a data do retorno */
 const RETORNO: (keyof PedidoEdicao)[] = ['motivoRetorno', 'pedidoReenvio'];
 const ROTULO: Record<string, string> = Object.fromEntries(DESTINOS.filter(([d]) => d && d !== 'pedido'));
@@ -93,7 +105,7 @@ const ORD_QUADRO: Record<Etapa, [string, string, (r: Reg) => string, boolean][]>
   prev: [
     ['emi-asc', 'Emissão: mais antigos primeiro', (r) => r.p.emissao, true],
     ['emi-desc', 'Emissão: mais novos primeiro', (r) => r.p.emissao, false],
-    ['sai-asc', 'Previsão de saída: mais próxima primeiro', (r) => r.p.previsaoSaida || '9999', true],
+    ['sai-asc', 'Saída programada: mais próxima primeiro', (r) => r.p.previsaoSaida || '9999', true],
   ],
   fat: [
     ['fat-asc', 'NF: mais antigas primeiro', (r) => r.p.dataFaturamento, true],
@@ -257,6 +269,7 @@ interface Estado {
 
 const ABAS: [string, string][] = [
   ['quadros', 'Quadros'],
+  ['programacao', 'Programação'],
   ['lista', 'Lista completa'],
   ['indicadores', 'Indicadores'],
 ];
@@ -270,6 +283,10 @@ export class Painel {
   private readonly hoje: Date;
   private tela = ler('tela', 'quadros');
   private salvando = false;
+  /** Programacao: pedidos gravando (botao desligado) e o que esta sendo arrastado */
+  private readonly ocupados = new Set<number>();
+  private arrastando = 0;
+  private limSemProg = LIMITE_CARTOES;
   /** importacao por planilha (janela aberta) */
   private imp: Imp | null = null;
   /** gaveta aberta: recno do pedido */
@@ -358,6 +375,10 @@ export class Painel {
   definirDados(r: LogResposta): void {
     this.resp = r;
     this.faltando = new Set(r.camposFaltando || []);
+    // API anterior a 2026-11-15a nao le nem grava especie e pesos: desliga os campos
+    if (!r.versao || r.versao < '2026-11-15a') PARA_NFE.forEach((k) => this.faltando.add(CAMPO[k]));
+    // API anterior a 2026-11-15b: sem C5_ZOBS e a saida programada ainda copia para o envio
+    if (!r.versao || r.versao < '2026-11-15b') this.faltando.add(CAMPO.obsEntrega);
     this.regs = (r.pedidos || []).map((p) => this.montar(p));
     this.carregando = false;
     this.erroCarga = '';
@@ -421,7 +442,7 @@ export class Painel {
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, p.cte, p.cteReentrega, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, p.cte, p.cteReentrega, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega].join(' '),
       ),
     };
   }
@@ -539,6 +560,7 @@ export class Painel {
     }
     const telas: Record<string, () => string> = {
       quadros: () => this.telaQuadros(),
+      programacao: () => this.telaProgramacao(),
       lista: () => this.telaLista(),
       indicadores: () => this.telaIndicadores(),
     };
@@ -595,6 +617,11 @@ export class Painel {
         ${kpi('Faturados parados', n0(fatParado), 'com NF há mais de 2 dias, sem envio', fatParado > 0)}
         ${kpi('Sem previsão de entrega', n0(regs.filter((r) => r.et === 'env' && r.prazo === 'semprev').length), 'enviados sem a data da transportadora')}
         ${(() => {
+          if (PARA_NFE.every((k) => this.faltando.has(CAMPO[k]))) return '';
+          const sem = regs.filter((r) => this.faltaNfe(r.p).length).length;
+          return kpi('Sem dados para a NF-e', n0(sem), 'sem NF e falta espécie, peso líquido ou bruto', sem > 0);
+        })()}
+        ${(() => {
           const ag = regs.filter((r) => r.et === 'ret' && !r.p.pedidoReenvio).length;
           return kpi('Aguardando reenvio', n0(ag), 'voltaram e ainda sem o pedido do reenvio', ag > 0);
         })()}
@@ -613,7 +640,7 @@ export class Painel {
     if (r.et === 'ret' && !p.pedidoReenvio) pills.push(`<span class="pill atrasado">Aguardando reenvio</span>`);
     if (r.et === 'ret' && p.motivoRetorno) pills.push(`<span class="pill semprev">${esc(this.txtOp('motivoRetorno', p.motivoRetorno))}</span>`);
     let datas = '';
-    if (r.et === 'prev') datas = p.previsaoSaida ? `Saída prevista ${fmtCurto(p.previsaoSaida)}` : `Emitido ${fmtCurto(p.emissao)}`;
+    if (r.et === 'prev') datas = p.previsaoSaida ? `Saída programada ${fmtCurto(p.previsaoSaida)}` : `Emitido ${fmtCurto(p.emissao)}`;
     else if (r.et === 'fat') datas = `NF ${esc((p.notas || []).join(', '))} · ${fmtCurto(p.dataFaturamento)}${p.dataFaturamento ? ` (há ${dias(dt(p.dataFaturamento) as Date, this.hoje)} d)` : ''}`;
     else if (r.et === 'env') datas = `Envio ${fmtCurto(p.dataEnvio)} · Previsão ${p.dataPrevisao ? fmtCurto(p.dataPrevisao) : '–'}`;
     else if (r.et === 'ret') datas = `Retornou ${fmtCurto(p.dataRetorno || '')} (há ${dias(dt(p.dataRetorno || '') as Date, this.hoje)} d)${p.pedidoReenvio ? ` · Reenvio no pedido ${esc(p.pedidoReenvio)}` : ''}`;
@@ -633,6 +660,222 @@ export class Painel {
     if (r.prazo === 'atrasado' && r.atraso !== null) t = curto ? `Atrasado ${r.atraso} d` : `Atrasado ${r.atraso} dia${r.atraso === 1 ? '' : 's'}`;
     if (r.prazo === 'vence' && r.atraso !== null) t = -r.atraso === 0 ? 'Vence hoje' : `Vence em ${-r.atraso} d`;
     return `<span class="pill ${r.prazo}">${esc(t)}</span>`;
+  }
+
+  // ---------- Programacao (kanban de saidas + entregas previstas para hoje) ----------
+  // Pedido do usuario (15/11/2026): ver o que esta programado para sair em cada
+  // dia e o que saiu ou nao. C5_FECENT = saida PROGRAMADA; o envio (C5_ZDTENV) so
+  // e gravado no "Saiu". O que passou do dia sem sair cai em "Nao sairam"
+  // sozinho; arrastar para outro dia reprograma.
+  private diasProgramacao(): string[] {
+    const out: string[] = [];
+    const d = new Date(this.hoje);
+    while (out.length < 5) {
+      const fds = d.getDay() === 0 || d.getDay() === 6;
+      if (!fds || iso(d) === iso(this.hoje)) out.push(iso(d));
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+
+  private telaProgramacao(): string {
+    const hj = iso(this.hoje);
+    const regs = this.base();
+    const apiVelha = !this.resp?.versao || this.resp.versao < '2026-11-15b';
+    const dias0 = this.diasProgramacao();
+    // fim de semana dentro do periodo so aparece se tiver pedido programado
+    const fimFaixa = dias0[dias0.length - 1];
+    const comFds = [...new Set(regs.map((r) => r.p.previsaoSaida).filter((d) => d && d > hj && d < fimFaixa && !dias0.includes(d)))];
+    const dias = [...dias0, ...comFds].sort();
+    const pend = (r: Reg) => !r.p.dataEnvio;
+    const naoSairam = regs.filter((r) => r.p.previsaoSaida && r.p.previsaoSaida < hj && pend(r)).sort((a, b) => a.p.previsaoSaida.localeCompare(b.p.previsaoSaida));
+    const doDia = (d: string) =>
+      regs
+        .filter((r) => r.p.previsaoSaida === d || (d === hj && r.p.dataEnvio === hj && r.p.previsaoSaida !== hj))
+        .sort((a, b) => Number(!pend(a)) - Number(!pend(b)) || a.p.pedido.localeCompare(b.p.pedido));
+    const depois = regs.filter((r) => r.p.previsaoSaida > fimFaixa && pend(r)).sort((a, b) => a.p.previsaoSaida.localeCompare(b.p.previsaoSaida));
+    // sem programacao: so o que ainda nao saiu; faturados primeiro (ja podem sair)
+    const semTodos = regs
+      .filter((r) => !r.p.previsaoSaida && pend(r) && (r.et === 'prev' || r.et === 'fat'))
+      .sort((a, b) => Number(a.et !== 'fat') - Number(b.et !== 'fat') || a.p.emissao.localeCompare(b.p.emissao));
+    const sem = semTodos.slice(0, this.limSemProg);
+    const sem_fat = semTodos.filter((r) => r.et === 'fat').length;
+    const hoje = doDia(hj);
+    const sairamHoje = hoje.filter((r) => !pend(r)).length;
+    const entHoje = regs
+      .filter((r) => r.p.dataPrevisao === hj && (r.et === 'env' || r.et === 'ent'))
+      .sort((a, b) => Number(a.et === 'ent') - Number(b.et === 'ent') || a.p.pedido.localeCompare(b.p.pedido));
+    const entregues = entHoje.filter((r) => r.et === 'ent').length;
+    const SEMANA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+    const rotDia = (d: string) => (d === hj ? `Hoje · ${fmtCurto(d)}` : `${SEMANA[(dt(d) as Date).getDay()]} · ${fmtCurto(d)}`);
+    const coluna = (dia: string, titulo: string, sub: string, cor: string, itens: Reg[], extra = '', soltar = true) =>
+      `<section class="quadro kb-col" ${soltar && !apiVelha ? `data-dia="${dia}"` : ''} style="--cor:${cor}" aria-label="${esc(titulo)}">
+        <header><h2><span>${esc(titulo)}</span><span class="q num">${n0(itens.length)}</span></h2><p>${sub}</p></header>
+        <div class="lista">${itens.map((r) => this.cartaoKb(r, dia, apiVelha)).join('') || `<p class="muted vazio">${soltar && !apiVelha ? 'Arraste pedidos para cá.' : 'Nenhum pedido.'}</p>`}${extra}</div>
+      </section>`;
+    const kpi = (r: string, v: string, s: string, crit = false) => `<div class="kpi${crit ? ' crit' : ''}"><div class="r">${r}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+    const cols = [
+      coluna('', 'Não saíram', 'saída programada já passou e sem envio', '#b3261e', naoSairam, '', false),
+      ...dias.map((d) => {
+        const it = doDia(d);
+        const saiu = it.filter((r) => !pend(r)).length;
+        return coluna(d, rotDia(d), d === hj ? `${n0(saiu)} saíram · ${n0(it.length - saiu)} falta sair` : `${n0(it.reduce((s, r) => s + r.qtd, 0))} un programadas`, d === hj ? '#0b6e99' : '#5b8db8', it);
+      }),
+      coluna('', 'Depois', `programados depois de ${fmtCurto(fimFaixa)}`, '#8a94a0', depois, '', false),
+      coluna(
+        '-',
+        'Sem programação',
+        `${n0(semTodos.length)} sem data de saída · ${n0(sem_fat)} já com NF`,
+        '#c8a400',
+        sem,
+        semTodos.length > sem.length ? `<div class="mais"><button class="btn-txt" data-kb="mais" data-rec="0">Mostrar mais ${n0(Math.min(LIMITE_CARTOES, semTodos.length - sem.length))} de ${n0(semTodos.length - sem.length)}</button></div>` : '',
+      ),
+    ].join('');
+    const entCartoes = entHoje.map((r) => this.cartaoKb(r, 'ent', apiVelha)).join('');
+    return `${apiVelha ? '<p class="aviso"><b>A programação está só para consulta:</b> o Protheus ainda está com a versão anterior da consulta de logística, que copia a saída programada para a data de envio. Compile o RESTLOGREL.tlpp 2026-11-15b para arrastar e marcar "Saiu" por aqui.</p>' : ''}
+      <div class="resumo">
+        ${kpi('Saem hoje', n0(hoje.length), `${n0(sairamHoje)} saíram · ${n0(hoje.length - sairamHoje)} falta sair`)}
+        ${kpi('Não saíram', n0(naoSairam.length), 'saída programada passou sem envio', naoSairam.length > 0)}
+        ${kpi('Entregas previstas hoje', n0(entHoje.length), `${n0(entregues)} entregues · ${n0(entHoje.length - entregues)} em trânsito`)}
+        ${kpi('Com NF sem programação', n0(sem_fat), 'faturados ainda sem data de saída', sem_fat > 0)}
+      </div>
+      <section class="painel">
+        <header><h2>Programação de saídas</h2><p>Saída programada = data de saída do pedido (C5_FECENT). Arraste o cartão para o dia em que ele deve sair, ou para "Sem programação" para tirar a data. "Saiu" grava a data de envio de hoje. Clique no cartão para abrir o pedido.</p></header>
+        <div class="kb-quadro">${cols}</div>
+      </section>
+      <section class="painel">
+        <header><h2>Entregas previstas para hoje · ${fmt(hj)}</h2><p>Pedidos enviados com a previsão da transportadora (C5_ZDTPREV) para hoje. "Entregue" grava a data de entrega de hoje (a nova data, quando houve reentrega).</p></header>
+        <div class="corpo">${entCartoes ? `<div class="kb-grade">${entCartoes}</div>` : '<p class="muted">Nenhuma entrega prevista para hoje.</p>'}</div>
+      </section>`;
+  }
+
+  /** Cartao da programacao. onde = dia da coluna, '' (nao sairam/depois), '-' (sem programacao) ou 'ent' (entregas de hoje) */
+  private cartaoKb(r: Reg, onde: string, soLeitura: boolean): string {
+    const p = r.p;
+    const hj = iso(this.hoje);
+    const ocupado = this.ocupados.has(p.recno);
+    const saiu = !!p.dataEnvio;
+    const pills: string[] = [];
+    if (onde !== 'ent') {
+      if ((p.notas || []).length) pills.push(`<span class="pill mat">NF ${esc((p.notas || []).join(', '))}</span>`);
+      else pills.push('<span class="pill semprev">Sem NF</span>');
+      if (this.faltaNfe(p).length) pills.push('<span class="pill atrasado" title="Espécie, peso líquido ou peso bruto vazio">Falta dado da NF-e</span>');
+    } else if (r.prazo) pills.push(this.pillPrazo(r, true));
+    let linha = '';
+    let botao = '';
+    if (onde === 'ent') {
+      if (r.et === 'ent') linha = `<span class="kb-st ok">✓ Entregue ${fmtCurto(r.entFinal)}</span>`;
+      else {
+        linha = `<span class="m">Enviado ${fmtCurto(p.dataEnvio)}${p.cte ? ` · CTE ${esc(p.cte)}` : ''}</span>`;
+        botao = `<button type="button" class="btn pri kb-btn" data-kb="entregue" data-rec="${p.recno}" ${ocupado || soLeitura ? 'disabled' : ''}>${ocupado ? 'Gravando…' : 'Entregue'}</button>`;
+      }
+    } else if (saiu) {
+      const atrasou = p.previsaoSaida && p.dataEnvio > p.previsaoSaida;
+      linha = `<span class="kb-st ok">✓ Saiu ${fmtCurto(p.dataEnvio)}${p.previsaoSaida !== p.dataEnvio ? ` <span class="muted">(programado ${p.previsaoSaida ? fmtCurto(p.previsaoSaida) : 'sem data'}${atrasou ? ', saiu atrasado' : ''})</span>` : ''}</span>`;
+      if (p.dataEnvio === hj && !r.entFinal && !p.dataRetorno && !soLeitura)
+        botao = `<button type="button" class="btn-txt kb-btn" data-kb="desfazer" data-rec="${p.recno}" ${ocupado ? 'disabled' : ''}>Desfazer</button>`;
+    } else {
+      if (onde === '' && p.previsaoSaida) {
+        const d = dias(dt(p.previsaoSaida) as Date, this.hoje);
+        linha = d > 0 ? `<span class="kb-st crit">Programado ${fmtCurto(p.previsaoSaida)} · há ${d} d</span>` : `<span class="m">Programado ${fmt(p.previsaoSaida)}</span>`;
+      } else if (onde === '-') linha = `<span class="m">Emitido ${fmtCurto(p.emissao)}${p.dataFaturamento ? ` · NF ${fmtCurto(p.dataFaturamento)}` : ''}</span>`;
+      if (onde !== '-' && (onde === '' ? p.previsaoSaida < hj : onde <= hj))
+        botao = `<button type="button" class="btn pri kb-btn" data-kb="saiu" data-rec="${p.recno}" ${ocupado || soLeitura ? 'disabled' : ''} title="Grava a data de envio de hoje">${ocupado ? 'Gravando…' : 'Saiu'}</button>`;
+    }
+    const nf1 = this.notasDe(p)[0];
+    if (nf1 && onde !== 'ent') botao = `<button type="button" class="btn kb-btn" data-nf="danfe" data-nota="${esc(nf1.nota)}" data-serie="${esc(nf1.serie)}" data-pedido="${esc(p.pedido)}" title="Imprimir o DANFE da NF ${esc(nf1.nota)} (SPEDNFE)">DANFE</button>` + botao;
+    const arrasta = !saiu && onde !== 'ent' && !soLeitura && !ocupado;
+    const obs = p.obsEntrega ? `<span class="m kb-obs" title="${esc(p.obsEntrega)}">📝 ${esc(p.obsEntrega.length > 70 ? p.obsEntrega.slice(0, 70) + '…' : p.obsEntrega)}</span>` : '';
+    return `<article class="cartao kb${saiu && onde !== 'ent' ? ' feito' : ''}${onde === 'ent' && r.et === 'ent' ? ' feito' : ''}" data-ped="${p.recno}" tabindex="0" ${arrasta ? `draggable="true" data-arrasta="${p.recno}"` : ''} style="--cor:${ET[r.et].cor}">
+      <span class="l1"><b class="mono">${esc(p.pedido)}</b>${pills.join('')}</span>
+      <span class="cli" title="${esc(p.nome)}">${esc(p.fantasia || p.nome || '(sem nome)')}</span>
+      <span class="m">${esc([p.cidade, p.uf].filter(Boolean).join('/') || 'sem cidade')} · ${esc(this.transpNome(r))}</span>
+      <span class="m">${n0(r.qtd)} un${p.volume ? ` · ${n0(p.volume)} vol` : ''}${p.pesoBruto ? ` · ${n0(p.pesoBruto)} kg` : ''}</span>
+      ${obs}${linha}${botao ? `<span class="kb-acoes">${botao}</span>` : ''}
+    </article>`;
+  }
+
+  private async acaoKanban(acao: string, recno: number): Promise<void> {
+    const hj = iso(this.hoje);
+    if (acao === 'mais') {
+      this.limSemProg += LIMITE_CARTOES;
+      this.desenhar();
+      return;
+    }
+    const r = this.reg(recno);
+    if (!r) return;
+    if (acao === 'saiu') await this.gravarRapido(r, { dataEnvio: hj }, `Pedido ${r.p.pedido}: saída registrada hoje.`);
+    else if (acao === 'desfazer') await this.gravarRapido(r, { dataEnvio: '' }, `Pedido ${r.p.pedido}: saída desfeita.`);
+    else if (acao === 'entregue') {
+      const reent = r.p.reentrega === 'SIM' && !this.faltando.has(CAMPO.dataNovaEntrega);
+      await this.gravarRapido(r, reent ? { dataNovaEntrega: hj } : { dataEntrega: hj }, `Pedido ${r.p.pedido}: entrega registrada hoje.`);
+    }
+  }
+
+  private async programar(recno: number, dia: string): Promise<void> {
+    const r = this.reg(recno);
+    if (!r || r.p.previsaoSaida === dia || r.p.dataEnvio) return;
+    await this.gravarRapido(r, { previsaoSaida: dia }, dia ? `Pedido ${r.p.pedido} programado para ${fmt(dia)}.` : `Pedido ${r.p.pedido} sem programação.`);
+  }
+
+  /** Notas do pedido (numero, serie, data), sem repetir */
+  private notasDe(p: Pedido): { nota: string; serie: string; data: string }[] {
+    const vistas = new Map<string, { nota: string; serie: string; data: string }>();
+    (p.itens || []).forEach((i) => {
+      if (i.nota && !vistas.has(i.nota + '|' + i.serie)) vistas.set(i.nota + '|' + i.serie, { nota: i.nota, serie: i.serie || '', data: i.dataFat || '' });
+    });
+    return [...vistas.values()];
+  }
+
+  /** Gaveta: cada NF do pedido com DANFE e carta de correcao (pedido do usuario, 15/11/2026) */
+  private barraNotas(p: Pedido): string {
+    const notas = this.notasDe(p);
+    if (!notas.length) return '';
+    const fora = !this.api.nota;
+    return `<div class="nf-barra">${notas
+      .map((n) => {
+        const d = dt(n.data);
+        const idade = d ? dias(d, this.hoje) : null;
+        const cceVencida = idade !== null && idade > 30;
+        const attrs = `data-nota="${esc(n.nota)}" data-serie="${esc(n.serie)}" data-pedido="${esc(p.pedido)}" ${fora ? 'disabled title="Só com a tela aberta pelo Protheus"' : ''}`;
+        return `<div class="nf-item">
+          <span class="nf-id"><b>NF ${esc(n.nota)}</b>${n.serie ? ` · série ${esc(n.serie)}` : ''}${n.data ? ` · ${fmt(n.data)}` : ''}</span>
+          <span class="nf-bts"><button type="button" class="btn pri" data-nf="danfe" ${attrs}>Imprimir DANFE</button>
+          <button type="button" class="btn" data-nf="cce" ${attrs}>Carta de correção</button></span>
+          ${cceVencida ? `<span class="nota">Faturada há ${idade} dias: a SEFAZ só aceita carta de correção até 30 dias depois da autorização.</span>` : ''}
+        </div>`;
+      })
+      .join('')}${fora ? '<p class="nota">DANFE e carta de correção abrem as rotinas da SPEDNFE e só funcionam com a tela aberta pelo menu do Protheus.</p>' : ''}</div>`;
+  }
+
+  private acaoNota(acao: 'danfe' | 'cce', nota: string, serie: string, pedido: string): void {
+    if (!this.api.nota) {
+      this.aviso('DANFE e carta de correção só funcionam com a tela aberta pelo menu do Protheus.', true);
+      return;
+    }
+    const ok = this.api.nota(acao, { nota, serie, pedido });
+    if (!ok) this.aviso('Não foi possível falar com o Protheus para abrir a rotina. Feche a tela e abra de novo pelo menu.', true);
+    else this.aviso(acao === 'danfe' ? `Abrindo o DANFE da NF ${nota} no Protheus…` : `Abrindo a carta de correção da NF ${nota} no Protheus…`);
+  }
+
+  /** Grava um campo pela programacao (mesmo PUT da gaveta) e atualiza o cartao */
+  private async gravarRapido(r: Reg, dados: PedidoEdicao, ok: string): Promise<void> {
+    if (this.ocupados.has(r.p.recno)) return;
+    this.ocupados.add(r.p.recno);
+    this.desenhar();
+    try {
+      const novo = await this.api.salvar(r.p.recno, dados);
+      if (novo && novo.pedido) {
+        const i = this.regs.findIndex((x) => x.p.recno === r.p.recno);
+        if (i >= 0) this.regs[i] = this.montar(novo);
+      }
+      this.aviso(ok);
+    } catch (e) {
+      this.aviso(`Não foi possível gravar o pedido ${r.p.pedido}: ${this.api.mensagemErro(e)}`, true);
+    } finally {
+      this.ocupados.delete(r.p.recno);
+      this.desenhar();
+    }
   }
 
   // ---------- Lista ----------
@@ -661,6 +904,10 @@ export class Painel {
       { k: 'transp', t: 'Transportadora', v: (r) => (r.p.transportadora ? `${r.p.transportadora} - ${r.p.transportadoraNome}` : '') },
       { k: 'frete', t: 'Frete destacado', v: (r) => r.p.frete, f: m, dir: true, tit: 'C5_FRETE (do pedido, repete em cada item)' },
       { k: 'vol', t: 'Volume', v: (r) => r.p.volume, f: (v) => (v ? n0(Number(v)) : ''), dir: true },
+      { k: 'esp', t: 'Espécie', v: (r) => r.p.especie || '', tit: 'C5_ESPECI1 (do pedido, repete em cada item)' },
+      { k: 'pliq', t: 'Peso líquido', v: (r) => r.p.pesoLiquido || 0, f: (v) => pesoTxt(Number(v)), dir: true, tit: 'C5_PESOL (do pedido, repete em cada item)' },
+      { k: 'obs', t: 'Observações da entrega', v: (r) => r.p.obsEntrega || '', tit: 'C5_ZOBS' },
+      { k: 'pbru', t: 'Peso bruto', v: (r) => r.p.pesoBruto || 0, f: (v) => pesoTxt(Number(v)), dir: true, tit: 'C5_PBRUTO (do pedido, repete em cada item)' },
       { k: 'fnd', t: 'Frete não destacado', v: (r) => r.p.freteNaoDestacado, f: m, dir: true, tit: 'C5_ZFRETE (do pedido, repete em cada item)' },
       { k: 'tpmat', t: 'Tipo de material', v: (r) => this.txtOp('tipoMaterial', r.p.tipoMaterial) },
       { k: 'denv', t: 'Envio', v: (r) => r.p.dataEnvio, f: d },
@@ -1001,7 +1248,10 @@ export class Painel {
     const texto = (k: keyof PedidoEdicao, rot: string, v: string, extra = false) =>
       `<div class="campo"><label for="f-${k}">${rot}</label><input id="f-${k}" type="text" data-f="${k}" value="${esc(v)}" ${tam[CAMPO[k]] ? `maxlength="${tam[CAMPO[k]]}"` : ''} ${dis(k, extra)} ${tit(k)}></div>`;
     const num = (k: keyof PedidoEdicao, rot: string, v: number, extra = false) =>
-      `<div class="campo"><label for="f-${k}">${rot}</label><input id="f-${k}" type="text" inputmode="decimal" data-f="${k}" value="${esc(k === 'volume' ? (v ? String(v) : '') : numTxt(v))}" ${dis(k, extra)} ${tit(k)}></div>`;
+      `<div class="campo"><label for="f-${k}">${rot}</label><input id="f-${k}" type="text" inputmode="decimal" data-f="${k}" value="${esc(k === 'volume' ? (v ? String(v) : '') : k === 'pesoLiquido' || k === 'pesoBruto' ? pesoTxt(v) : numTxt(v))}" ${dis(k, extra)} ${tit(k)}></div>`;
+    // Frete: so consulta (sem data-f: nao entra no formulario nem no PUT)
+    const fixo = (rot: string, campo: string, v: string) =>
+      `<div class="campo"><label>${rot}</label><input type="text" class="so-leitura" value="${esc(v)}" readonly tabindex="-1" title="${campo}: só consulta, não é alterado aqui"></div>`;
     const combo = (k: keyof PedidoEdicao, rot: string, ops: Opcao[], v: string) =>
       `<div class="campo"><label for="f-${k}">${rot}</label><select id="f-${k}" data-f="${k}" ${dis(k)} ${tit(k)}><option value="">(não informado)</option>${ops.map(([c, t]) => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}>${esc(c)} - ${esc(t)}</option>`).join('')}${v && !ops.some(([c]) => c === v) ? `<option value="${esc(v)}" selected>${esc(v)}</option>` : ''}</select></div>`;
     const transps = this.resp?.transportadoras || [];
@@ -1015,7 +1265,7 @@ export class Painel {
       .join('');
     const passos: [string, string][] = [
       ['Emissão do pedido', p.emissao],
-      ['Data de saída (C5_FECENT)', p.previsaoSaida],
+      ['Saída programada (C5_FECENT)', p.previsaoSaida],
       ['Faturamento (NF)', p.dataFaturamento],
       ['Envio (saiu da empresa)', p.dataEnvio],
       ['Previsão da transportadora', p.dataPrevisao],
@@ -1038,14 +1288,28 @@ export class Painel {
           <span class="pilha-h"><span class="pill etapa" style="--cor:${ET[r.et].cor}">${esc(ET[r.et].curto)}</span>${this.pillPrazo(r)}${reent ? '<span class="pill reent">Reentrega</span>' : ''}${r.parcial ? '<span class="pill semprev">NF parcial</span>' : ''}${r.et === 'ret' && !p.pedidoReenvio ? '<span class="pill atrasado">Aguardando reenvio</span>' : ''}${origem.length ? `<span class="pill mat">Reenvio do pedido ${esc(origem.join(', '))}</span>` : ''}</span>
         </div><button class="fechar" data-acao="fechar" aria-label="Fechar">×</button></header>
         <div class="rolar">
+          ${this.barraNotas(p)}
           <form class="form-log" id="lg-form" autocomplete="off">
+            <fieldset class="grupo-f"><legend>Dados do pedido</legend>
+              ${faturado ? '<p class="nota inteiro">Pedido com nota fiscal: transportadora, volume, espécie e pesos já saíram na NF e não são alterados aqui.</p>' : '<p class="nota inteiro">Espécie, peso líquido e peso bruto têm que estar preenchidos antes da emissão da NF-e.</p>'}
+              <div class="campo inteiro"><label for="f-transportadora">Transportadora</label><input id="f-transportadora" list="lg-transps" data-f="transportadora" value="${esc(p.transportadora ? `${p.transportadora} - ${p.transportadoraNome}` : '')}" placeholder="Código ou nome" ${dis('transportadora', faturado)}>
+                <datalist id="lg-transps">${transps.map(([c, n]) => `<option value="${esc(c)} - ${esc(n)}"></option>`).join('')}</datalist></div>
+              ${num('volume', 'Volume', p.volume, faturado)}
+              ${texto('especie', 'Espécie', p.especie || '', faturado)}
+              ${num('pesoLiquido', 'Peso líquido', p.pesoLiquido || 0, faturado)}
+              ${num('pesoBruto', 'Peso bruto', p.pesoBruto || 0, faturado)}
+              ${fixo('Frete destacado (R$)', 'C5_FRETE', numTxt(p.frete) || '0,00')}
+              ${fixo('Frete não destacado (R$)', 'C5_ZFRETE', numTxt(p.freteNaoDestacado) || '0,00')}
+              ${p.freteNaoDestacadoTexto && numBR(p.freteNaoDestacadoTexto) !== p.freteNaoDestacado ? `<p class="nota inteiro">Frete não destacado gravado como texto: "${esc(p.freteNaoDestacadoTexto)}".</p>` : ''}
+            </fieldset>
             <fieldset class="grupo-f"><legend>Envio e entrega</legend>
-              ${data('previsaoSaida', 'Data de saída (C5_FECENT)', p.previsaoSaida)}
+              ${data('previsaoSaida', 'Saída programada (C5_FECENT)', p.previsaoSaida)}
               ${data('dataEnvio', 'Data de envio', p.dataEnvio)}
               ${data('dataPrevisao', 'Previsão de entrega (transportadora)', p.dataPrevisao, false, false)}
               ${data('dataEntrega', 'Data de entrega', p.dataEntrega)}
               ${combo('tipoMaterial', 'Tipo de material', this.op('tipoMaterial'), p.tipoMaterial)}
               ${combo('indicador', 'Indicador de atraso', this.op('indicador'), p.indicador)}
+              <div class="campo inteiro"><label for="f-obsEntrega">Observações da entrega</label><textarea id="f-obsEntrega" data-f="obsEntrega" rows="3" ${tam[CAMPO.obsEntrega] ? `maxlength="${tam[CAMPO.obsEntrega]}"` : ''} placeholder="Texto livre: horário de recebimento, contato, acesso…" ${dis('obsEntrega')} ${tit('obsEntrega')}>${esc(p.obsEntrega || '')}</textarea></div>
             </fieldset>
             <fieldset class="grupo-f"><legend>CTE da transportadora</legend>
               ${texto('cte', 'Número do CTE', p.cte)}
@@ -1064,15 +1328,6 @@ export class Painel {
               ${data('dataRetorno', 'Data do retorno', p.dataRetorno || '')}
               ${combo('motivoRetorno', 'Motivo do retorno', this.op('motivoRetorno'), p.motivoRetorno || '')}
               <div class="campo"><label for="f-pedidoReenvio">Pedido do reenvio</label><input id="f-pedidoReenvio" type="text" data-f="pedidoReenvio" value="${esc(p.pedidoReenvio || '')}" maxlength="6" placeholder="Nº do novo pedido" ${dis('pedidoReenvio')} ${tit('pedidoReenvio')}></div>
-            </fieldset>
-            <fieldset class="grupo-f"><legend>Dados do pedido</legend>
-              ${faturado ? '<p class="nota inteiro">Pedido com nota fiscal: transportadora, frete e volume já saíram na NF e não são alterados aqui.</p>' : ''}
-              <div class="campo inteiro"><label for="f-transportadora">Transportadora</label><input id="f-transportadora" list="lg-transps" data-f="transportadora" value="${esc(p.transportadora ? `${p.transportadora} - ${p.transportadoraNome}` : '')}" placeholder="Código ou nome" ${dis('transportadora', faturado)}>
-                <datalist id="lg-transps">${transps.map(([c, n]) => `<option value="${esc(c)} - ${esc(n)}"></option>`).join('')}</datalist></div>
-              ${num('frete', 'Frete destacado (R$)', p.frete, faturado)}
-              ${num('freteNaoDestacado', 'Frete não destacado (R$)', p.freteNaoDestacado, faturado)}
-              ${num('volume', 'Volume', p.volume, faturado)}
-              ${p.freteNaoDestacadoTexto && numBR(p.freteNaoDestacadoTexto) !== p.freteNaoDestacado ? `<p class="nota inteiro">Frete não destacado gravado como texto: "${esc(p.freteNaoDestacadoTexto)}".</p>` : ''}
             </fieldset>
             <ul class="avisos-f" id="lg-avisos" aria-live="polite"></ul>
           </form>
@@ -1115,7 +1370,7 @@ export class Painel {
     const f = this.el.camada.querySelector('#lg-form') as HTMLFormElement | null;
     const out: Record<string, string | number> = {};
     if (!f) return out;
-    f.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach((el) => {
+    f.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-f]').forEach((el) => {
       const k = el.dataset['f'] as keyof PedidoEdicao;
       if (el instanceof HTMLInputElement && el.type === 'radio') {
         if (el.checked) out[k] = el.value;
@@ -1132,6 +1387,16 @@ export class Painel {
       }
       if (k === 'pedidoReenvio') {
         out[k] = numPedido(el.value);
+        return;
+      }
+      if (k === 'especie') {
+        out[k] = el.value.trim().toUpperCase();
+        return;
+      }
+      if (k === 'obsEntrega') {
+        // campo caracter (tem tamanho): uma linha so; memo: mantem as quebras
+        const txt = el.value.replace(/\r\n?/g, '\n').trim();
+        out[k] = this.resp?.tamanhos?.[CAMPO.obsEntrega] ? txt.replace(/\s*\n\s*/g, ' ') : txt;
         return;
       }
       out[k] = el.value.trim();
@@ -1194,6 +1459,10 @@ export class Painel {
       frete: p.frete || 0,
       volume: p.volume || 0,
       freteNaoDestacado: p.freteNaoDestacado || 0,
+      especie: p.especie || '',
+      pesoLiquido: p.pesoLiquido || 0,
+      pesoBruto: p.pesoBruto || 0,
+      obsEntrega: (p.obsEntrega || '').replace(/\r\n?/g, '\n').trim(),
     };
   }
 
@@ -1253,7 +1522,20 @@ export class Painel {
     if (!final && !ret && prev && prev < iso(this.hoje) && env && !v.indicador) avisos.push('Previsão vencida e sem entrega: escolha o indicador de atraso.');
     if (v.reentrega === 'S' && !nova) avisos.push('Reentrega sem a nova data de entrega: o pedido continua em Enviados até ela ser informada.');
     if (env && !v.cte) avisos.push('Falta o número do CTE.');
+    const sai = v.previsaoSaida || '';
+    if (sai && !env && sai < iso(this.hoje)) avisos.push(`A saída programada (${fmt(sai)}) passou e o pedido não saiu: informe a data de envio ou reprograme.`);
+    if (!(p.notas || []).length) {
+      const nfe = PARA_NFE.filter((k) => !this.faltando.has(CAMPO[k]) && !v[k]);
+      if (nfe.length) avisos.push(`Antes da emissão da NF-e, preencha: ${nfe.map((k) => this.rotulo(k).toLowerCase()).join(', ')}.`);
+      if (v.pesoLiquido && v.pesoBruto && v.pesoBruto < v.pesoLiquido) avisos.push('O peso bruto está menor que o peso líquido.');
+    }
     return { erros, avisos };
+  }
+
+  /** Pedido sem NF com espécie, peso líquido ou peso bruto vazio (campos que existem) */
+  private faltaNfe(p: Pedido): (keyof PedidoEdicao)[] {
+    if ((p.notas || []).length) return [];
+    return PARA_NFE.filter((k) => !this.faltando.has(CAMPO[k]) && !p[k as 'especie' | 'pesoLiquido' | 'pesoBruto']);
   }
 
   private rotulo(k: keyof PedidoEdicao): string {
@@ -1297,16 +1579,6 @@ export class Painel {
     }
   }
 
-  /** Preencheu a data de saida (C5_FECENT): a data de envio recebe a mesma data (pedido do usuario, 13/11/2026) */
-  private sincronizarSaida(el: HTMLInputElement): void {
-    if (el?.dataset?.['f'] !== 'previsaoSaida' || !el.value) return;
-    const env = this.el.camada.querySelector('[data-f="dataEnvio"]') as HTMLInputElement | null;
-    if (env && !env.disabled && env.value !== el.value) {
-      env.value = el.value;
-      env.classList.add('copiado');
-      setTimeout(() => env.classList.remove('copiado'), 1200);
-    }
-  }
 
   private limparFiltros(): void {
     MULTI.forEach(([k]) => (this.e[k] = []));
@@ -1555,6 +1827,7 @@ export class Painel {
     if (v === '' || v === undefined || v === null) return '(vazio)';
     if (k.startsWith('data')) return fmt(String(v));
     if (k === 'volume') return v ? n0(Number(v)) : '(vazio)';
+    if (k === 'pesoLiquido' || k === 'pesoBruto') return v ? pesoTxt(Number(v)) : '(vazio)';
     if (NUMEROS.includes(k as keyof PedidoEdicao)) return v ? rs(Number(v)) : '(vazio)';
     if (k === 'tipoMaterial' || k === 'indicador') return this.txtOp(k, String(v));
     if (k === 'reentrega') return v === 'S' ? 'Sim' : 'Não';
@@ -1749,12 +2022,23 @@ export class Painel {
         this.irPara(aba.dataset['tela'] as string);
         return;
       }
+      const nf = t.closest('[data-nf]') as HTMLElement | null;
+      if (nf) {
+        ev.stopPropagation();
+        this.acaoNota(nf.dataset['nf'] as 'danfe' | 'cce', nf.dataset['nota'] as string, nf.dataset['serie'] || '', nf.dataset['pedido'] as string);
+        return;
+      }
+      const kb = t.closest('[data-kb]') as HTMLElement | null;
+      if (kb) {
+        ev.stopPropagation();
+        void this.acaoKanban(kb.dataset['kb'] as string, Number(kb.dataset['rec']));
+        return;
+      }
       const hoje = t.closest('[data-hoje]') as HTMLElement | null;
       if (hoje) {
         const inp = this.el.camada.querySelector(`[data-f="${hoje.dataset['hoje']}"]`) as HTMLInputElement | null;
         if (inp && !inp.disabled) {
           inp.value = iso(this.hoje);
-          this.sincronizarSaida(inp);
           this.atualizarForm();
         }
         return;
@@ -1828,6 +2112,40 @@ export class Painel {
       }
     });
 
+    // Programacao: arrastar o pedido para outro dia (ou para "Sem programacao")
+    raiz.addEventListener('dragstart', (ev) => {
+      const c = (ev.target as HTMLElement).closest?.('[data-arrasta]') as HTMLElement | null;
+      if (!c || !ev.dataTransfer) return;
+      ev.dataTransfer.setData('text/plain', c.dataset['arrasta'] as string);
+      ev.dataTransfer.effectAllowed = 'move';
+      this.arrastando = Number(c.dataset['arrasta']);
+      c.classList.add('arrastando');
+    });
+    raiz.addEventListener('dragend', (ev) => {
+      (ev.target as HTMLElement).classList?.remove('arrastando');
+      this.arrastando = 0;
+      raiz.querySelectorAll('.kb-col.alvo').forEach((x) => x.classList.remove('alvo'));
+    });
+    raiz.addEventListener('dragover', (ev) => {
+      const col = (ev.target as HTMLElement).closest?.('[data-dia]') as HTMLElement | null;
+      if (!col || !this.arrastando) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
+      if (!col.classList.contains('alvo')) {
+        raiz.querySelectorAll('.kb-col.alvo').forEach((x) => x.classList.remove('alvo'));
+        col.classList.add('alvo');
+      }
+    });
+    raiz.addEventListener('drop', (ev) => {
+      const col = (ev.target as HTMLElement).closest?.('[data-dia]') as HTMLElement | null;
+      if (!col) return;
+      ev.preventDefault();
+      col.classList.remove('alvo');
+      const rec = Number(ev.dataTransfer?.getData('text/plain') || this.arrastando);
+      this.arrastando = 0;
+      if (rec) void this.programar(rec, col.dataset['dia'] === '-' ? '' : (col.dataset['dia'] as string));
+    });
+
     // Ordem dos quadros e campos da importacao
     raiz.addEventListener('change', (ev) => {
       const t = ev.target as HTMLInputElement;
@@ -1857,12 +2175,10 @@ export class Painel {
     // Formulario da gaveta: qualquer mudanca reconfere as regras
     this.el.camada.addEventListener('input', (ev) => {
       if (!(ev.target as HTMLElement).closest('#lg-form')) return;
-      this.sincronizarSaida(ev.target as HTMLInputElement);
       this.atualizarForm();
     });
     this.el.camada.addEventListener('change', (ev) => {
       if (!(ev.target as HTMLElement).closest('#lg-form')) return;
-      this.sincronizarSaida(ev.target as HTMLInputElement);
       this.atualizarForm();
     });
     this.el.camada.addEventListener('submit', (ev) => ev.preventDefault());

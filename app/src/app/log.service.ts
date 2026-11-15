@@ -51,6 +51,10 @@ export interface Pedido {
   freteNaoDestacadoTexto: string;
   freteNaoDestacado: number;
   volume: number;
+  /** Dados da NF-e, preenchidos antes da emissao: C5_ESPECI1, C5_PESOL, C5_PBRUTO; API >= 2026-11-15a */
+  especie?: string;
+  pesoLiquido?: number;
+  pesoBruto?: number;
   dataEnvio: string;
   dataPrevisao: string;
   dataEntrega: string;
@@ -66,6 +70,8 @@ export interface Pedido {
   dataRetorno?: string;
   motivoRetorno?: string;
   pedidoReenvio?: string;
+  /** C5_ZOBS: observacoes da entrega (texto livre); API >= 2026-11-15b */
+  obsEntrega?: string;
   itens: ItemPedido[];
   notas: string[];
   dataFaturamento: string;
@@ -89,7 +95,7 @@ export interface LogResposta {
 
 /** Corpo do PUT: so os campos alterados. Datas AAAA-MM-DD, '' limpa */
 export interface PedidoEdicao {
-  /** C5_FECENT (preencher tambem preenche a data de envio); API >= 2026-11-13f */
+  /** C5_FECENT = saida PROGRAMADA (aba Programacao). Desde a API 2026-11-15b nao copia para o envio */
   previsaoSaida?: string;
   dataEnvio?: string;
   dataPrevisao?: string;
@@ -106,9 +112,14 @@ export interface PedidoEdicao {
   motivoRetorno?: string;
   pedidoReenvio?: string;
   transportadora?: string;
+  /** Frete destacado/nao destacado: so consulta desde 15/11/2026 (a API nao grava mais) */
   frete?: number;
   volume?: number;
   freteNaoDestacado?: number;
+  especie?: string;
+  pesoLiquido?: number;
+  pesoBruto?: number;
+  obsEntrega?: string;
 }
 
 @Injectable({ providedIn: 'root' })

@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { AfterViewInit, Component, ElementRef, inject, OnDestroy, ViewChild } from '@angular/core';
-import { ProAppConfigService } from '@totvs/protheus-lib-core';
+import { ProAppConfigService, ProJsToAdvplService } from '@totvs/protheus-lib-core';
 import { firstValueFrom, Subscription } from 'rxjs';
 import { errosTela } from './erros';
 import { LogService, mensagemErro, semToken } from './log.service';
@@ -21,6 +21,7 @@ function isoHoje(): string {
 export class App implements AfterViewInit, OnDestroy {
   private readonly log = inject(LogService);
   private readonly proConfig = inject(ProAppConfigService);
+  private readonly advpl = inject(ProJsToAdvplService);
   @ViewChild('raiz', { static: true }) raiz!: ElementRef<HTMLElement>;
   private painel!: Painel;
   private consulta?: Subscription;
@@ -41,6 +42,8 @@ export class App implements AfterViewInit, OnDestroy {
         mensagemErro: (e) => mensagemErro(e),
         diagnostico: () => firstValueFrom(this.log.baseRest$).then((b) => this.diagnostico(b)),
         fechar: this.dentroProtheus() ? () => this.proConfig.callAppClose() : null,
+        // DANFE e carta de correcao: o LOGRELAPP.PRW (JsToAdvpl) chama as rotinas padrao da SPEDNFE
+        nota: this.dentroProtheus() ? (acao, d) => this.advpl.jsToAdvpl(acao, JSON.stringify(d)) : null,
       },
       de,
       ate,

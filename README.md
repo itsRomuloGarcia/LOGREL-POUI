@@ -1,21 +1,26 @@
 # LOGREL - Logística (pedidos de entrega)
 
-Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em quatro etapas (previstos, faturados, enviados e entregues). A edição dos dados de envio, entrega, CTE e reentrega é feita na própria tela, que também traz os indicadores de prazo e de frete × CTE.
+Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em cinco etapas (previstos, faturados, enviados, entregues e retornados) e programa as saídas do dia. A edição dos dados de envio, entrega, CTE e reentrega é feita na própria tela, que também imprime o DANFE, abre a carta de correção e traz os indicadores de prazo e de frete × CTE.
 
 | | |
 |---|---|
 | API | `API/RESTLOGREL.tlpp` (TLPP, versão `LG_VERSAO`) |
-| Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`) |
+| Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`; também recebe os pedidos de DANFE e carta de correção da tela) |
 | Tela | `app/`: Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4 |
 | Acesso | `U_VSAPIACE` (`..\API-Acesso-main\VSACESSO.tlpp`) + parâmetro `MV_VSAPUSR` |
 | Criada em | 13/11/2026, no molde do PCPREL (`PO-UI-Protheus-main`) |
+
+## Para que serve
+
+Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a transportadora e a data de saída, o faturamento emite a nota e a logística imprime as notas do e-mail e redigita cada envio na planilha ENVIOS 2026 (59 colunas, cerca de 19 envios por dia). A tela traz do Protheus o que ele já sabe e deixa para a logística só o transporte. Explicação completa, com imagens de dados fictícios, em `..\Comunicados\2026-11-logistica\Logistica - tela no Protheus.pdf`.
 
 ## O que a tela faz
 
 **Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Importar planilha** e **Diagnóstico**. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
 **Abas:**
-- **Quadros:** as quatro colunas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão). Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
+- **Quadros:** as colunas das etapas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio). Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
+- **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue".
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
   - prazo (no prazo × atrasado) e motivos de atraso, com percentual;
@@ -25,11 +30,13 @@ Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("lo
   - CTE × frete cobrado, com os 20 piores casos;
   - modelos mais enviados, tipo de material e envios por UF.
 
-**Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. O formulário edita:
-- datas: saída (`C5_FECENT`, que também preenche a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
+**Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. No topo, cada NF do pedido com os botões **Imprimir DANFE** e **Carta de correção**, que abrem as rotinas padrão da SPEDNFE por cima da tela (só dentro do Protheus; aviso quando a nota tem mais de 30 dias). O formulário edita, nesta ordem:
+- dados do pedido para a NF-e (transportadora, volume, espécie, peso líquido e peso bruto), antes da nota. O frete destacado e o não destacado aparecem só para consulta;
+- datas: saída programada (`C5_FECENT`, desde 15/11/2026 não preenche mais a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
 - tipo de material, CTE e valor;
 - reentrega e indicador de atraso;
-- dados comerciais (transportadora, frete, volume e frete não destacado).
+- observações da entrega (`C5_ZOBS`), texto livre;
+- retorno: data, motivo e pedido do reenvio.
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
@@ -45,6 +52,7 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 
 | Campo | Na tela | Edita |
 |---|---|---|
+| `C5_FECENT` | Saída programada (põe o pedido na aba Programação; não preenche o envio) | sim |
 | `C5_ZDTENV` | Data de envio | sim |
 | `C5_ZDTPREV` | Previsão de entrega da transportadora | sim |
 | `C5_ZDTENTR` | Data de entrega | sim |
@@ -56,7 +64,9 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZDTRET` | Data do retorno: a mercadoria voltou para a empresa e o pedido vai para Retornados | sim |
 | `C5_ZMOTRET` | Motivo do retorno (combo: 1=Recusa, 2=Endereço, 3=Avaria, 4=Outros) | só com data do retorno |
 | `C5_ZPEDREN` | Pedido do reenvio (o novo pedido que leva a mercadoria de novo) | só com data do retorno |
-| `C5_TRANSP`, `C5_FRETE`, `C5_VOLUME1`, `C5_ZFRETE` | Transportadora, frete, volume, frete não destacado | só antes da NF |
+| `C5_ZOBS` | Observações da entrega (texto livre; caracter ou memo) | sim |
+| `C5_TRANSP`, `C5_VOLUME1`, `C5_ESPECI1`, `C5_PESOL`, `C5_PBRUTO` | Transportadora, volume, espécie, peso líquido, peso bruto | só antes da NF |
+| `C5_FRETE`, `C5_ZFRETE` | Frete destacado, frete não destacado | só consulta (desde 15/11/2026) |
 | `C5_ZTPPEDI` | Tipo de pedido | não |
 
 - As opções dos combos vêm do `X3_CBOX`. Para mudar uma opção, ajuste o SX3; a tela acompanha sem recompilar.
@@ -97,11 +107,11 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 
 | Arquivo | Conteúdo |
 |---|---|
-| `painel.ts` | A tela inteira: quadros, lista, indicadores, gaveta e importação. |
+| `painel.ts` | A tela inteira: quadros, programação, lista, indicadores, gaveta (com os botões da NF) e importação. |
 | `importar.ts` | Leitura da planilha: separadores, títulos, datas, números e combos. |
 | `log.service.ts` | Chamadas GET/PUT e mensagens de erro. |
 | `graficos.ts` | Gráficos (copiado do PCPREL). |
-| `app.ts` | Casca: carga e Diagnóstico. |
+| `app.ts` | Casca: carga, Diagnóstico e chamada do DANFE/carta de correção (`jsToAdvpl` → `JsToAdvpl` do `LOGRELAPP.PRW`). |
 | `token.interceptor.ts` | Renova o token pelo REST do ambiente. |
 | `erros.ts` | Erros de JavaScript. |
 | `src/styles.css` | Visual da tela: base do PCPREL mais o bloco "Logistica (LOGREL)". |

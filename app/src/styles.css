@@ -475,3 +475,34 @@ html, body { margin: 0; background: var(--bg); }
 @media (max-width: 600px) { .rx .compara .barra { grid-template-columns: 110px minmax(0, 1fr) auto; } }
 /* data de envio preenchida a partir da data de saida (C5_FECENT) */
 .rx .grupo-f .campo input.copiado { background: var(--accent-soft); border-color: var(--accent); transition: background 0.3s; }
+
+/* Gaveta: campo so de consulta (frete destacado / nao destacado, 15/11/2026) */
+.rx .grupo-f .campo input.so-leitura { background: transparent; border-style: dashed; color: var(--fg); cursor: default; }
+.rx .grupo-f .campo input.so-leitura:focus { outline: none; box-shadow: none; }
+
+/* Programacao de saidas (kanban) e entregas previstas para hoje, 15/11/2026 */
+.rx .kb-quadro { display: flex; gap: 12px; overflow-x: auto; padding: 12px; align-items: flex-start; }
+.rx .kb-col { flex: 0 0 236px; max-height: max(460px, calc(100vh - 330px)); }
+.rx .kb-col[data-dia] { transition: outline-color 0.1s; outline: 2px dashed transparent; outline-offset: -2px; }
+.rx .kb-col.alvo { outline-color: var(--accent); background: var(--accent-soft); }
+.rx .cartao.kb { cursor: pointer; }
+.rx .cartao.kb[draggable="true"] { cursor: grab; }
+.rx .cartao.kb.arrastando { opacity: 0.45; }
+.rx .cartao.kb.feito { opacity: 0.78; border-left-color: #2e7d32; }
+.rx .cartao.kb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rx .kb-st { font-size: 12px; font-weight: 700; }
+.rx .kb-st.ok { color: #2e7d32; }
+.rx .kb-st.crit { color: #b3261e; }
+.rx .kb-obs { font-style: italic; }
+.rx .kb-acoes { display: flex; justify-content: flex-end; margin-top: 3px; }
+.rx .kb-btn { padding: 3px 12px; font-size: 12px; }
+.rx .kb-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.rx .grupo-f .campo textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); }
+.rx .grupo-f .campo textarea:disabled { background: var(--surface-2); color: var(--muted); cursor: not-allowed; }
+@media (max-width: 760px) { .rx .kb-col { flex-basis: 82vw; } }
+
+/* Gaveta: notas do pedido com DANFE e carta de correcao (SPEDNFE), 15/11/2026 */
+.rx .nf-barra { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.rx .nf-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 8px 12px; background: var(--surface); }
+.rx .nf-item .nf-bts { display: flex; gap: 6px; flex-wrap: wrap; }
+.rx .nf-item .nota { flex-basis: 100%; }
