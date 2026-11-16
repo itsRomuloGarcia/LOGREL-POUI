@@ -43,6 +43,10 @@
 //   - "opcoes": combos do SX3 (X3_CBOX) de C5_ZTPMAT, C5_ZINDICA, C5_ZREENTR,
 //     C5_ZTPPEDI e C5_ZMOTRET, para a tela nao depender de lista fixa.
 //   - "transportadoras": SA4 inteira (codigo e nome), para a edicao.
+//   - Numeros de serie (2026-11-16a, pedido do usuario, igual ao RX Pedidos):
+//     cada item ganha "numerosSerie" = [[serie, nf], ...] da Z01 (Z01_PEDIDO,
+//     Z01_ITEM, Z01_SERIE, Z01_NFEDO), com e sem NF. Sem a tabela Z01 ou as
+//     colunas, os itens vao sem series e "Z01" entra em camposFaltando.
 //
 // PUT /api/v1/vs-financial-data/logistica/pedidos/:recno  (R_E_C_N_O_ da SC5)
 //   Grava direto na SC5 com RecLock (sem MATA410: sem gatilho/validacao do
@@ -73,7 +77,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-15b"
+#define LG_VERSAO     "2026-11-16a"
 #define LG_DIAS_PADR  365
 #define LG_DIAS_MAX   1100
 #define LG_BUSCA_MAX  500
@@ -912,7 +916,103 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
       FechaPedido(jPed, aItens, aNotas, cDtFat)
       aAdd(aPed, jPed)
    EndIf
+
+   cEtapa := "02c-series"
+   NumerosSerie(aPed, @aFalta)
 Return aPed
+
+// Numeros de serie da Z01 (como o RX Pedidos): em cada item, "numerosSerie" =
+// [[serie, nf], ...], com e sem NF. Lotes de 900 pedidos (limite do IN do
+// Oracle). A Z01 e as colunas sao conferidas antes: tabela ou coluna que nao
+// existe derruba a thread do REST sem passar pelo Recover.
+Static Function NumerosSerie(aPed, aFalta)
+   Local jSer   := JsonObject():New()
+   Local aLote  := {}
+   Local aVazio := {}
+   Local cKey   := ""
+   Local nI     := 0
+   Local nJ     := 0
+   Local aIt    := {}
+
+   If Len(aPed) == 0
+      Return Nil
+   EndIf
+   If !TemZ01()
+      aAdd(aFalta, "Z01")
+      Return Nil
+   EndIf
+   For nI := 1 to Len(aPed)
+      aAdd(aLote, aPed[nI]["pedido"])
+      If Len(aLote) == 900 .or. nI == Len(aPed)
+         SerieLote(aLote, jSer)
+         aLote := {}
+      EndIf
+   Next nI
+   For nI := 1 to Len(aPed)
+      aIt := aPed[nI]["itens"]
+      For nJ := 1 to Len(aIt)
+         cKey := aPed[nI]["pedido"] + "|" + aIt[nJ]["item"]
+         If ValType(jSer[cKey]) == "A"
+            aIt[nJ]["numerosSerie"] := jSer[cKey]
+         Else
+            aVazio := {}
+            aIt[nJ]["numerosSerie"] := aVazio
+         EndIf
+      Next nJ
+   Next nI
+Return Nil
+
+Static Function TemZ01()
+   Local cAl   := GetNextAlias()
+   Local oStmt := Nil
+   Local nCols := 0
+   oStmt := FWExecStatement():New("SELECT COUNT(*) AS QTD FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ? " + ;
+      "AND COLUMN_NAME IN ('Z01_FILIAL','Z01_PEDIDO','Z01_ITEM','Z01_SERIE','Z01_NFEDO','D_E_L_E_T_')")
+   oStmt:SetString(1, AllTrim(RetSqlName("Z01")))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      nCols := NNum((cAl)->QTD)
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return nCols == 6
+
+Static Function SerieLote(aNums, jSer)
+   Local cQuery := ""
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   Local cIn    := ""
+   Local cKey   := ""
+   Local aSer   := {}
+   Local nI     := 0
+
+   For nI := 1 to Len(aNums)
+      cIn += IIf(nI > 1, ",", "") + "?"
+   Next nI
+   cQuery := "SELECT Z01_PEDIDO, Z01_ITEM, Z01_SERIE, Z01_NFEDO FROM " + RetSqlName("Z01") + " "
+   cQuery += "WHERE RTRIM(Z01_PEDIDO) IN (" + cIn + ") AND Z01_SERIE <> ' ' "
+   cQuery += "  AND (Z01_FILIAL = ' ' OR Z01_FILIAL = ?) AND D_E_L_E_T_ = ' ' "
+   cQuery += "ORDER BY Z01_PEDIDO, Z01_ITEM, Z01_SERIE "
+
+   oStmt := FWExecStatement():New(cQuery)
+   For nI := 1 to Len(aNums)
+      oStmt:SetString(nI, aNums[nI])
+   Next nI
+   oStmt:SetString(Len(aNums) + 1, FWxFilial("SC6"))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      Do While !(cAl)->(Eof())
+         cKey := AllTrim((cAl)->Z01_PEDIDO) + "|" + AllTrim((cAl)->Z01_ITEM)
+         // o array do JsonObject pode vir copiado: monta e grava de volta
+         aSer := IIf(ValType(jSer[cKey]) == "A", jSer[cKey], {})
+         aAdd(aSer, {TxtOut((cAl)->Z01_SERIE), AllTrim(SStr((cAl)->Z01_NFEDO))})
+         jSer[cKey] := aSer
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return Nil
 
 Static Function FechaPedido(jPed, aItens, aNotas, cDtFat)
    jPed["itens"]       := aItens

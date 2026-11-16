@@ -23,6 +23,8 @@ export interface ItemPedido {
   nota: string;
   serie: string;
   dataFat: string;
+  /** Numeros de serie da Z01 do item, com e sem NF: [serie, nf]. API >= 2026-11-16a (antes: ausente) */
+  numerosSerie?: [string, string][];
 }
 
 /** Datas em AAAA-MM-DD ('' = vazia). reentrega = 'SIM' | 'NAO' | '' */

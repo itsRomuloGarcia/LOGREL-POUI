@@ -34,7 +34,10 @@ Mensagens do app para o ADVPL (exigida pelo FwCallApp no mesmo fonte).
 O fechamento e tratado pelo framework. Desde 15/11/2026 (pedido do usuario):
   - "danfe": imprime o DANFE da nota pela rotina padrao da SPEDNFE (SpedDanfe),
     com as perguntas (NFSIGW) ja preenchidas com a nota;
-  - "cce": abre a carta de correcao padrao da SPEDNFE com a nota posicionada.
+  A carta de correcao ("cce"/"cceimp") existiu de 15 a 16/11/2026 e foi
+  retirada a pedido do usuario: a digitacao abria, mas a impressao da CC-e
+  nao fica no menu da SPEDNFE deste ambiente e a busca da rotina chegou a
+  travar a tela. A CC-e continua sendo feita e impressa pela SPEDNFE.
 Conteudo = JSON {"nota": "000123", "serie": "1", "pedido": "000001"}.
 Roda na thread do SmartClient: as telas padrao abrem normalmente por cima do app.
 @type function
@@ -43,25 +46,25 @@ Static Function JsToAdvpl(oWebChannel, cType, cContent)
    Local jDados := Nil
    Local xErr   := Nil
 
-   If cType == "danfe" .or. cType == "cce"
+   If cType == "danfe"
       jDados := JsonObject():New()
       xErr := jDados:FromJson(IIf(ValType(cContent) == "C", cContent, ""))
       If ValType(xErr) == "C"
          MsgStop("Dados da nota invalidos: " + IIf(ValType(cContent) == "C", cContent, "(vazio)"), "LOGRELAPP")
          Return .T.
       EndIf
-      AcaoNota(cType, Txt(jDados["nota"]), Txt(jDados["serie"]), Txt(jDados["pedido"]))
+      AcaoNota(Txt(jDados["nota"]), Txt(jDados["serie"]), Txt(jDados["pedido"]))
    EndIf
 Return .T.
 
 // Posiciona a SF2 e chama a rotina padrao, mostrando na tela qualquer erro
 // (sem console no TOTVS Cloud, o usuario manda o texto da mensagem)
-Static Function AcaoNota(cAcao, cNota, cSerie, cPedido)
+Static Function AcaoNota(cNota, cSerie, cPedido)
    Local aArea   := GetArea()
    Local aAreaF2 := SF2->(GetArea())
    Local bErrOld := ErrorBlock({|oE| Break(oE) })
    Local oErr    := Nil
-   Local cRotulo := IIf(cAcao == "danfe", "DANFE", "Carta de correcao")
+   Local cRotulo := "DANFE"
 
    If Empty(cNota)
       MsgStop("Pedido " + cPedido + " sem nota fiscal.", "LOGRELAPP")
@@ -74,11 +77,7 @@ Static Function AcaoNota(cAcao, cNota, cSerie, cPedido)
          // usuario desistiu
       Else
          Begin Sequence
-            If cAcao == "danfe"
-               ImprDanfe(cNota, cSerie)
-            Else
-               CartaCorrecao()
-            EndIf
+            ImprDanfe(cNota, cSerie)
          Recover Using oErr
             MsgStop("Erro ao abrir " + cRotulo + " da nota " + cNota + "/" + cSerie + ":" + CRLF + CRLF + ;
                TxtErro(oErr), "LOGRELAPP")
@@ -109,41 +108,11 @@ Static Function ImprDanfe(cNota, cSerie)
    SpedDanfe()
 Return
 
-// Carta de correcao: a primeira rotina da SPEDNFE que existir no RPO, com a
-// SF2 posicionada (parametros de rotina de browse: alias, recno, opcao)
-Static Function CartaCorrecao()
-   Local aCand := {"SPEDCCE", "SPEDNFECCE", "SPEDCCEREMESSA", "SPEDCCEREM", "SPEDNFECARTA"}
-   Local cFunc := ""
-   Local nRec  := SF2->(Recno())
-   Local nI    := 0
-   // variaveis que as rotinas da SPEDNFE costumam esperar do browse
-   Private cCadastro  := "Carta de Correcao"
-   Private aRotina    := {}
-   Private bFiltraBrw := {|| .T. }
-   Private aFilBrw    := {"SF2", ""}
-
-   For nI := 1 to Len(aCand)
-      If FindFunction(aCand[nI])
-         cFunc := aCand[nI]
-         Exit
-      EndIf
-   Next nI
-   If Empty(cFunc)
-      MsgStop("Nao achei a rotina de carta de correcao no RPO." + CRLF + ;
-         "Procurei: " + ArrToTxt(aCand) + CRLF + CRLF + ;
-         "Funcoes com CCE no RPO:" + CRLF + ListaFuncoes("*CCE*") + CRLF + ;
-         "Mande esta mensagem para ajustar o nome.", "LOGRELAPP")
-      Return
-   EndIf
-   &(cFunc + '("SF2", ' + cValToChar(nRec) + ', 4)')
-Return
-
 // Perguntas do DANFE ja com a nota (pelo texto da pergunta, para nao depender
 // da ordem): da/ate nota, serie e tipo de operacao = saida. Se algo falhar, o
 // usuario so preenche na tela da pergunta, como faz hoje.
 Static Function PreenchePerg(cGrupo, cNota, cSerie)
    Local bErrOld := ErrorBlock({|oE| Break(oE) })
-   Local oErr    := Nil
    Local cTxt    := ""
    Local cPar    := ""
    Local cGrp    := ""
@@ -174,7 +143,7 @@ Static Function PreenchePerg(cGrupo, cNota, cSerie)
             SX1->(DbSkip())
          EndDo
       EndIf
-   Recover Using oErr
+   Recover
       // sem preenchimento automatico: a pergunta abre com os ultimos valores
    End Sequence
    ErrorBlock(bErrOld)
@@ -191,14 +160,6 @@ Static Function ListaFuncoes(cMascara)
       cRet += AllTrim(aF[nI]) + IIf(nI < Min(Len(aF), 40), ", ", "")
    Next nI
 Return IIf(Empty(cRet), "(nenhuma)", cRet + IIf(Len(aF) > 40, " ... (" + cValToChar(Len(aF)) + " no total)", ""))
-
-Static Function ArrToTxt(aLista)
-   Local cRet := ""
-   Local nI   := 0
-   For nI := 1 to Len(aLista)
-      cRet += IIf(nI > 1, ", ", "") + aLista[nI]
-   Next nI
-Return cRet
 
 Static Function TxtErro(oErr)
    Local cRet := ""

@@ -8,6 +8,9 @@ import { ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.serv
 // Desenhada direto no DOM (todo texto passa por esc()), no mesmo padrao e
 // visual da tela RX Pedidos (PCPREL).
 
+/** So o DANFE: a carta de correcao saiu da tela em 16/11/2026 (pedido do usuario) */
+export type AcaoNf = 'danfe';
+
 export interface Api {
   carregar(de: string, ate: string): void;
   salvar(recno: number, d: PedidoEdicao): Promise<Pedido>;
@@ -16,8 +19,8 @@ export interface Api {
   mensagemErro(e: unknown): string;
   diagnostico(): Promise<string>;
   fechar: (() => void) | null;
-  /** DANFE / carta de correcao pela SPEDNFE (so dentro do Protheus; false = sem canal) */
-  nota: ((acao: 'danfe' | 'cce', d: { nota: string; serie: string; pedido: string }) => boolean) | null;
+  /** DANFE pela SPEDNFE (so dentro do Protheus; false = sem canal) */
+  nota: ((acao: AcaoNf, d: { nota: string; serie: string; pedido: string }) => boolean) | null;
 }
 
 // ---------- regras ----------
@@ -442,7 +445,7 @@ export class Painel {
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, p.cte, p.cteReentrega, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, p.cte, p.cteReentrega, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
       ),
     };
   }
@@ -827,35 +830,42 @@ export class Painel {
     return [...vistas.values()];
   }
 
-  /** Gaveta: cada NF do pedido com DANFE e carta de correcao (pedido do usuario, 15/11/2026) */
+  /**
+   * Numeros de serie da Z01 na linha do produto (pedido do usuario, 16/11/2026, como no RX Pedidos).
+   * Mostra a NF da serie so quando ela difere da NF do item. Sem serie: nada.
+   */
+  private seriesItem(i: ItemPedido): string {
+    const sr = i.numerosSerie || [];
+    if (!sr.length) return '';
+    return `<span class="series-rot">Nº de série · ${n0(sr.length)} de ${n0(i.quantidade)} un</span><ul class="series-linha">${sr
+      .map(([s, nf]) => `<li title="${nf ? 'NF ' + esc(nf) : 'sem NF ainda'}"><b>${esc(s)}</b>${nf && nf !== i.nota ? ` <span class="muted">NF ${esc(nf)}</span>` : !nf && i.nota ? ' <span class="muted">sem NF</span>' : ''}</li>`)
+      .join('')}</ul>`;
+  }
+
+  /** Gaveta: cada NF do pedido com o DANFE (pedido do usuario, 15/11/2026; a carta de correcao saiu em 16/11) */
   private barraNotas(p: Pedido): string {
     const notas = this.notasDe(p);
     if (!notas.length) return '';
     const fora = !this.api.nota;
     return `<div class="nf-barra">${notas
       .map((n) => {
-        const d = dt(n.data);
-        const idade = d ? dias(d, this.hoje) : null;
-        const cceVencida = idade !== null && idade > 30;
         const attrs = `data-nota="${esc(n.nota)}" data-serie="${esc(n.serie)}" data-pedido="${esc(p.pedido)}" ${fora ? 'disabled title="Só com a tela aberta pelo Protheus"' : ''}`;
         return `<div class="nf-item">
           <span class="nf-id"><b>NF ${esc(n.nota)}</b>${n.serie ? ` · série ${esc(n.serie)}` : ''}${n.data ? ` · ${fmt(n.data)}` : ''}</span>
-          <span class="nf-bts"><button type="button" class="btn pri" data-nf="danfe" ${attrs}>Imprimir DANFE</button>
-          <button type="button" class="btn" data-nf="cce" ${attrs}>Carta de correção</button></span>
-          ${cceVencida ? `<span class="nota">Faturada há ${idade} dias: a SEFAZ só aceita carta de correção até 30 dias depois da autorização.</span>` : ''}
+          <span class="nf-bts"><button type="button" class="btn pri" data-nf="danfe" ${attrs}>Imprimir DANFE</button></span>
         </div>`;
       })
-      .join('')}${fora ? '<p class="nota">DANFE e carta de correção abrem as rotinas da SPEDNFE e só funcionam com a tela aberta pelo menu do Protheus.</p>' : ''}</div>`;
+      .join('')}${fora ? '<p class="nota">O DANFE abre a rotina da SPEDNFE e só funciona com a tela aberta pelo menu do Protheus.</p>' : ''}</div>`;
   }
 
-  private acaoNota(acao: 'danfe' | 'cce', nota: string, serie: string, pedido: string): void {
+  private acaoNota(acao: AcaoNf, nota: string, serie: string, pedido: string): void {
     if (!this.api.nota) {
-      this.aviso('DANFE e carta de correção só funcionam com a tela aberta pelo menu do Protheus.', true);
+      this.aviso('O DANFE só funciona com a tela aberta pelo menu do Protheus.', true);
       return;
     }
     const ok = this.api.nota(acao, { nota, serie, pedido });
     if (!ok) this.aviso('Não foi possível falar com o Protheus para abrir a rotina. Feche a tela e abra de novo pelo menu.', true);
-    else this.aviso(acao === 'danfe' ? `Abrindo o DANFE da NF ${nota} no Protheus…` : `Abrindo a carta de correção da NF ${nota} no Protheus…`);
+    else this.aviso(`Abrindo o DANFE da NF ${nota} no Protheus…`);
   }
 
   /** Grava um campo pela programacao (mesmo PUT da gaveta) e atualiza o cartao */
@@ -1260,7 +1270,7 @@ export class Painel {
     const itens = (p.itens || [])
       .map(
         (i) =>
-          `<tr class="sem-clique"><td class="quebra">${esc(i.descricao)}<span class="cod-linha">${esc(i.produto)} · item ${esc(i.item)}</span></td><td class="dir num">${n0(i.quantidade)}</td><td class="dir num">${rs(i.valor)}</td><td>${esc(i.tes)}<span class="cod-linha">${esc(i.descTes)}</span></td><td>${i.nota ? `${esc(i.nota)}<span class="cod-linha">${fmt(i.dataFat)}</span>` : '<span class="muted">sem NF</span>'}</td></tr>`,
+          `<tr class="sem-clique"><td class="quebra">${esc(i.descricao)}<span class="cod-linha">${esc(i.produto)} · item ${esc(i.item)}</span>${this.seriesItem(i)}</td><td class="dir num">${n0(i.quantidade)}</td><td class="dir num">${rs(i.valor)}</td><td>${esc(i.tes)}<span class="cod-linha">${esc(i.descTes)}</span></td><td>${i.nota ? `${esc(i.nota)}<span class="cod-linha">${fmt(i.dataFat)}</span>` : '<span class="muted">sem NF</span>'}</td></tr>`,
       )
       .join('');
     const passos: [string, string][] = [
@@ -2025,7 +2035,7 @@ export class Painel {
       const nf = t.closest('[data-nf]') as HTMLElement | null;
       if (nf) {
         ev.stopPropagation();
-        this.acaoNota(nf.dataset['nf'] as 'danfe' | 'cce', nf.dataset['nota'] as string, nf.dataset['serie'] || '', nf.dataset['pedido'] as string);
+        this.acaoNota(nf.dataset['nf'] as AcaoNf, nf.dataset['nota'] as string, nf.dataset['serie'] || '', nf.dataset['pedido'] as string);
         return;
       }
       const kb = t.closest('[data-kb]') as HTMLElement | null;

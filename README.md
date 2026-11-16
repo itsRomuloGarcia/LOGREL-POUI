@@ -1,11 +1,11 @@
 # LOGREL - Logística (pedidos de entrega)
 
-Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em cinco etapas (previstos, faturados, enviados, entregues e retornados) e programa as saídas do dia. A edição dos dados de envio, entrega, CTE e reentrega é feita na própria tela, que também imprime o DANFE, abre a carta de correção e traz os indicadores de prazo e de frete × CTE.
+Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em cinco etapas (previstos, faturados, enviados, entregues e retornados) e programa as saídas do dia. A edição dos dados de envio, entrega, CTE e reentrega é feita na própria tela, que também imprime o DANFE e traz os indicadores de prazo e de frete × CTE.
 
 | | |
 |---|---|
 | API | `API/RESTLOGREL.tlpp` (TLPP, versão `LG_VERSAO`) |
-| Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`; também recebe os pedidos de DANFE e carta de correção da tela) |
+| Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`; também recebe da tela o pedido de impressão do DANFE) |
 | Tela | `app/`: Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4 |
 | Acesso | `U_VSAPIACE` (`..\API-Acesso-main\VSACESSO.tlpp`) + parâmetro `MV_VSAPUSR` |
 | Criada em | 13/11/2026, no molde do PCPREL (`PO-UI-Protheus-main`) |
@@ -30,7 +30,7 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
   - CTE × frete cobrado, com os 20 piores casos;
   - modelos mais enviados, tipo de material e envios por UF.
 
-**Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. No topo, cada NF do pedido com os botões **Imprimir DANFE** e **Carta de correção**, que abrem as rotinas padrão da SPEDNFE por cima da tela (só dentro do Protheus; aviso quando a nota tem mais de 30 dias). O formulário edita, nesta ordem:
+**Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. No topo, cada NF do pedido com o botão **Imprimir DANFE**, que abre a rotina padrão da SPEDNFE por cima da tela (só dentro do Protheus). A carta de correção continua na SPEDNFE. Na tabela de itens, a linha de cada produto mostra os **números de série** (tabela Z01, como no RX Pedidos), quando houver. O formulário edita, nesta ordem:
 - dados do pedido para a NF-e (transportadora, volume, espécie, peso líquido e peso bruto), antes da nota. O frete destacado e o não destacado aparecem só para consulta;
 - datas: saída programada (`C5_FECENT`, desde 15/11/2026 não preenche mais a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
 - tipo de material, CTE e valor;
@@ -68,6 +68,7 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_TRANSP`, `C5_VOLUME1`, `C5_ESPECI1`, `C5_PESOL`, `C5_PBRUTO` | Transportadora, volume, espécie, peso líquido, peso bruto | só antes da NF |
 | `C5_FRETE`, `C5_ZFRETE` | Frete destacado, frete não destacado | só consulta (desde 15/11/2026) |
 | `C5_ZTPPEDI` | Tipo de pedido | não |
+| `Z01_SERIE` (tabela Z01) | Números de série do item, com a NF (`Z01_NFEDO`) | não |
 
 - As opções dos combos vêm do `X3_CBOX`. Para mudar uma opção, ajuste o SX3; a tela acompanha sem recompilar.
 - `C5_ZFRETE` é caracter. A API lê "1.234,56", "1234.56" ou "R$ 150" e grava com ponto decimal.
@@ -111,7 +112,7 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 | `importar.ts` | Leitura da planilha: separadores, títulos, datas, números e combos. |
 | `log.service.ts` | Chamadas GET/PUT e mensagens de erro. |
 | `graficos.ts` | Gráficos (copiado do PCPREL). |
-| `app.ts` | Casca: carga, Diagnóstico e chamada do DANFE/carta de correção (`jsToAdvpl` → `JsToAdvpl` do `LOGRELAPP.PRW`). |
+| `app.ts` | Casca: carga, Diagnóstico e chamada do DANFE (`jsToAdvpl` → `JsToAdvpl` do `LOGRELAPP.PRW`). |
 | `token.interceptor.ts` | Renova o token pelo REST do ambiente. |
 | `erros.ts` | Erros de JavaScript. |
 | `src/styles.css` | Visual da tela: base do PCPREL mais o bloco "Logistica (LOGREL)". |

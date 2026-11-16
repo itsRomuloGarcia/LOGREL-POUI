@@ -42,7 +42,7 @@ export class App implements AfterViewInit, OnDestroy {
         mensagemErro: (e) => mensagemErro(e),
         diagnostico: () => firstValueFrom(this.log.baseRest$).then((b) => this.diagnostico(b)),
         fechar: this.dentroProtheus() ? () => this.proConfig.callAppClose() : null,
-        // DANFE e carta de correcao: o LOGRELAPP.PRW (JsToAdvpl) chama as rotinas padrao da SPEDNFE
+        // DANFE: o LOGRELAPP.PRW (JsToAdvpl) chama a rotina padrao da SPEDNFE
         nota: this.dentroProtheus() ? (acao, d) => this.advpl.jsToAdvpl(acao, JSON.stringify(d)) : null,
       },
       de,

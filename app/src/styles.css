@@ -506,3 +506,9 @@ html, body { margin: 0; background: var(--bg); }
 .rx .nf-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 8px 12px; background: var(--surface); }
 .rx .nf-item .nf-bts { display: flex; gap: 6px; flex-wrap: wrap; }
 .rx .nf-item .nota { flex-basis: 100%; }
+
+/* Logistica: numeros de serie na linha do produto (16/11/2026) */
+.rx .series-rot { display: block; margin-top: 6px; font-size: 11px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; color: var(--fg-2, var(--fg)); opacity: .75; }
+.rx .series-linha { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 0; padding: 0; list-style: none; }
+.rx .series-linha li { padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-2); font-size: 11.5px; }
+.rx .series-linha li b { font-family: var(--mono); font-weight: 600; }
