@@ -11,6 +11,37 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 Cada pasta de patch (`API/`, `LOGRELAPP/`, `app/dist/homologacao/`, `app/dist/producao/`) tem só o arquivo que vai para o RPO. Não criar outros arquivos nelas.
 
+## Estações e Git (ler antes de mexer)
+
+Decisão do usuário em 17/11/2026: o repositório `itsRomuloGarcia/LOGREL-POUI` é a **única fonte**. As duas estações trabalham num clone dele, e a sincronização é só pelo Git, igual ao RX Pedidos.
+
+| Estação | Pasta |
+|---|---|
+| Trabalho | `C:\totvs\LOGREL-POUI` (clone desde 17/11/2026; a cópia de zip `LOGREL-POUI-main` foi apagada) |
+| Casa | `C:\Users\Trabalho\Documents\Videosoft\LOGREL-POUI` (**migração pendente**, ver abaixo) |
+
+**Sempre, nas duas estações:**
+- Antes de mexer, rodar `git pull`.
+- Depois de cada atualização (fonte, pacote `logrel.app`, CLAUDE.md, README), fazer commit e push no `origin/main` **na hora, sem pedir confirmação**. No fim, avisar o hash do commit.
+- Não enviar mais arquivos pela página do GitHub ("Add files via upload"). Foi isso que deixou as estações desencontradas até 16/11.
+- Nunca commitar credenciais (`.env`, `servers.json`, tokens, senhas). Também ficam fora do Git `Planilhas/` (dados reais da base), `node_modules/`, `.angular/` e `*.ptm`. A lista está no `.gitignore`.
+- Os arquivos vieram do upload com CRLF. Não normalizar o fim de linha do repositório inteiro, porque isso gera um diff enorme sem mudança real.
+
+**Migração na casa (fazer uma vez, no primeiro uso depois deste commit):**
+1. Procurar a cópia antiga do LOGREL em `Documents\Videosoft` ou no lugar de onde foram feitos os uploads. Ela é uma pasta **sem `.git`**, por exemplo `LOGREL-POUI-main`.
+2. Clonar o repositório em `Documents\Videosoft\LOGREL-POUI`. Se a pasta já existir com `.git`, só rodar `git pull`.
+3. Comparar a cópia antiga com o clone, arquivo por arquivo:
+   - ignorar a diferença de fim de linha (CRLF × LF);
+   - ignorar `node_modules`, `.angular` e `app/dist/app`;
+   - conferir a `LG_VERSAO` do `API/RESTLOGREL.tlpp`.
+   - **Se a cópia antiga tiver algo mais novo que o Git**, levar para o clone, fazer commit e push **antes** de apagar qualquer coisa. Na dúvida, perguntar ao usuário.
+4. Mover a pasta `Planilhas/` para dentro do clone; ela continua fora do Git. Se o `package-lock.json` for igual, também pode mover o `app/node_modules`. Senão, rodar `npm ci` em `app/`.
+5. Apagar a cópia antiga, depois de olhar o que tem nela.
+6. Gravar na memória do Claude da casa, que é separada da memória do trabalho:
+   - a nova pasta;
+   - a regra de pull, commit e push automáticos para este repositório.
+7. Nesta seção, trocar "**migração pendente**" por "clone desde DD/MM/AAAA", e fazer commit e push.
+
 ## Fluxo da logística (contado pelo usuário em 15/11/2026)
 
 1. O **PCP** decide quais pedidos saem no dia e manda a lista por e-mail para o faturamento e para a logística.
