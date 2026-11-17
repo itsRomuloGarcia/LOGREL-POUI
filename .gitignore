@@ -1,0 +1,11 @@
+# Dependencias e cache do Angular
+node_modules/
+.angular/
+
+# Planilhas com dados reais da base (ficam so na estacao)
+Planilhas/
+
+# Patch gerado pelo TDS e credenciais
+*.ptm
+.env
+servers.json
