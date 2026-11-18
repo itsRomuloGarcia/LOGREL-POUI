@@ -77,7 +77,12 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-16a"
+#define LG_VERSAO     "2026-11-18a"
+// Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
+// producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
+// "existiam" na producao, a query usava coluna inexistente e a thread caia
+// (500 sem X-Erro). Mesmo filtro do RESTPANORAMAESTOQUE.
+#define LG_OWNER      "OWNER = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')"
 #define LG_DIAS_PADR  365
 #define LG_DIAS_MAX   1100
 #define LG_BUSCA_MAX  500
@@ -966,7 +971,7 @@ Static Function TemZ01()
    Local cAl   := GetNextAlias()
    Local oStmt := Nil
    Local nCols := 0
-   oStmt := FWExecStatement():New("SELECT COUNT(*) AS QTD FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ? " + ;
+   oStmt := FWExecStatement():New("SELECT COUNT(*) AS QTD FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ? " + ;
       "AND COLUMN_NAME IN ('Z01_FILIAL','Z01_PEDIDO','Z01_ITEM','Z01_SERIE','Z01_NFEDO','D_E_L_E_T_')")
    oStmt:SetString(1, AllTrim(RetSqlName("Z01")))
    cAl := oStmt:OpenAlias(cAl)
@@ -1038,7 +1043,7 @@ Static Function ObsSql(cExist, aFalta)
       aAdd(aFalta, "C5_ZOBS")
       Return "' '"
    EndIf
-   oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = 'C5_ZOBS'")
+   oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ? AND COLUMN_NAME = 'C5_ZOBS'")
    oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
    cAl := oStmt:OpenAlias(cAl)
    If !Empty(cAl) .and. Select(cAl) > 0
@@ -1057,7 +1062,7 @@ Return "SC5.C5_ZOBS"
 Static Function ColunasExistentes()
    Local cRet  := "|"
    Local cAl   := GetNextAlias()
-   Local oStmt := FWExecStatement():New("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = ?")
+   Local oStmt := FWExecStatement():New("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ?")
    oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
    cAl := oStmt:OpenAlias(cAl)
    If !Empty(cAl) .and. Select(cAl) > 0
@@ -1227,6 +1232,8 @@ Static Function BuildErro(nStatus, cCod, cMsg)
    jE["error"]["message"] := cMsg
    // corpo de status >= 500 e descartado pelo framework: a mensagem vai no header
    oRest:setKeyHeaderResponse("X-Erro", cMsg)
+   // a tela roda em outra porta (CORS): sem isso o navegador esconde o X-Erro
+   oRest:setKeyHeaderResponse("Access-Control-Expose-Headers", "X-Erro, X-Erro-Etapa")
 Return oRest:setStatusResponse(nStatus, jE:ToJson())
 
 // sem Begin Sequence aqui dentro: e chamada no Recover

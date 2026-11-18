@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`), versão `LG_VERSAO` = `2026-11-16a` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`), versão `LG_VERSAO` = `2026-11-18a` | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
 | Acesso | `..\API-Acesso-main\VSACESSO.tlpp` (`U_VSAPIACE`) | sim, se ainda não estiver |
@@ -163,7 +163,15 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - **2º teste:** a impressão da CC-e **não foi achada**: o `FWLoadMenuDef("SPEDNFE")` não tem nenhuma opção de CC-e (Pesquisar, Wiz.Config., Parâmetros, Status Sefaz, Transmissão, Contribuinte, Danfe > Imp. Padrão/Imp. Etiqueta, Monitor, Visualiza Doc., Filtro, Exportar, Legenda, Inutilização) e o `*CCE*` pegava ACCESS. Diagnóstico refeito (`FuncoesCce`: SPED* de evento/impressão, CCE sem ACCESS, CARTA, CORREC; e `RotinaCce`, a rotina que abre a CC-e). Perguntado ao usuário o caminho que ele usa na SPEDNFE para imprimir a CC-e. Avisos W0003 (`oErr` sem uso) removidos. **3º teste:** com esse diagnóstico, o botão deixou a tela do Protheus **azul por 5 minutos** sem abrir nada. Causas prováveis: `GetFuncArray("SPED*")` varrendo o RPO inteiro, ou um nome adivinhado novo (`SPEDCCEIMPR`, `IMPRCCE`, `CCEIMP`) que existia e foi chamado às cegas. Corrigido: só máscaras `*CCE*` e `*CARTA*`, e nome fora do menu só é chamado com `MsgYesNo` mostrando o nome. **Não chamar rotina por nome adivinhado sem confirmação.**
   - **Final: carta de correção RETIRADA da tela** (pedido do usuário depois da tela azul): a tela e o `LOGRELAPP.PRW` ficaram **só com o DANFE** (`AcaoNf = 'danfe'`; `JsToAdvpl` só trata "danfe"; `CartaCorrecao`, `ImprCCe`, `AcaoMenu`, `RotinaCce`, `FuncoesCce` e `ArrToTxt` apagados). A CC-e continua sendo feita e impressa pela SPEDNFE. A digitação abria por um dos nomes `SPEDCCE`…, mas a impressão não está no `MenuDef` da SPEDNFE deste ambiente: não voltar a isso sem o caminho exato que o usuário usa.
 
+- **18/11/2026, erro 500 na produção** (API `2026-11-18a`, só o `RESTLOGREL.tlpp`):
+  - Diagnóstico do usuário: GET `/logistica/pedidos` com "Erro 500 Internal Server Error", sem mensagem, e a versão da API "ainda não carregou".
+  - Causa provável: homologação e produção estão no **mesmo Oracle**. As 3 consultas ao `ALL_TAB_COLUMNS` (`ColunasExistentes`, `ObsSql`, `TemZ01`) não filtravam o `OWNER`. Na produção, as colunas `C5_Z*` (e a `Z01`) da homologação pareciam existir, a query usava coluna inexistente e a thread caía sem passar pelo Recover (500 sem `X-Erro`). Corrigido com `OWNER = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')` (`LG_OWNER`), o mesmo filtro do `RESTPANORAMAESTOQUE`. **Toda consulta nova ao dicionário do Oracle leva esse filtro.**
+  - O `BuildErro` passou a mandar `Access-Control-Expose-Headers: X-Erro, X-Erro-Etapa`. A tela roda na porta do app e o REST em outra (CORS), então antes o navegador escondia o `X-Erro` e a tela só mostrava "Erro 500".
+  - Se os campos ainda não foram criados na produção (`U_LOGRELUPD`), a tela abre com eles em "Campos que faltam na SC5" e sem edição.
+  - **Não testado no Protheus.** Se o 500 continuar sem mensagem, a queda é fora do Recover: conferir se o `VSACESSO.tlpp` (`U_VSAPIACE`) está no RPO da produção.
+
 ## Pendências
+- **18/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-18a` na produção (e na homologação) e conferir no Diagnóstico a versão e os campos que faltam.
 - **16/11/2026:** compilar `RESTLOGREL.tlpp` `2026-11-16a` (séries), `LOGRELAPP.PRW` (só DANFE) e `logrel.app` (16/11 09:50). Conferir o DANFE de novo e as séries de um pedido com Z01 contra o RX Pedidos.
 - **18/11/2026, compatibilizador dos campos `C5_Z*`: `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`), não compilado nem testado.** Atende o pedido de 16/11.
   - **Exportar (homologação):**

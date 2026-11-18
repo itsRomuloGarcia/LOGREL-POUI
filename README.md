@@ -30,7 +30,7 @@ Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compa
 
 **2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
 1. Se ainda não estiver no RPO da produção, compile `..\API-Acesso-main\VSACESSO.tlpp` (`U_VSAPIACE`).
-2. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-16a`).
+2. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-18a`).
 3. Compile `LOGRELAPP/LOGRELAPP.PRW`.
 4. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
 
@@ -41,7 +41,7 @@ Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compa
 **4. Conferir**
 1. Abra a tela e clique em **Diagnóstico**. Confira três coisas:
    - o REST é o da porta 10407;
-   - a versão da API é `2026-11-16a`;
+   - a versão da API é `2026-11-18a`;
    - "Campos que faltam na SC5" está vazio.
 2. Abra um pedido, grave uma data de envio de teste e apague depois. Imprima o DANFE de um pedido faturado.
 3. O `U_LOGRELUPD` pode rodar de novo, porque só cria o que falta. Se o `X31UpdTable` der erro, o dicionário já está gravado: rode de novo fora do expediente.
