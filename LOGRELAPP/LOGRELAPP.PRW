@@ -4,7 +4,7 @@
 Abre a tela PO UI de Logistica (pedidos de entrega), recurso logrel.app no RPO.
 Os dados vem da API RESTLOGREL.tlpp (GET/PUT /logistica/pedidos), chamada com o
 token do usuario logado. Colocar no menu (SIGAFAT) apontando para U_LOGRELAPP:
-a API libera quem tem esta rotina no menu (U_VSAPIACE com "U_LOGRELAPP").
+o acesso e pelo menu (a API nao tem trava propria desde 18/11/2026).
 @type function
 @author Romulo Garcia
 @since 13/11/2026

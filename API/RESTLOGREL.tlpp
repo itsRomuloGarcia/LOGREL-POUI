@@ -70,8 +70,9 @@
 //   - combo: so codigo existente no X3_CBOX; texto no limite do TamSX3.
 //   Responde o pedido como o GET mostra, para a tela atualizar o cartao.
 //
-// Acesso: U_VSAPIACE(.T., "U_LOGRELAPP") (lista MV_VSAPUSR ou menu da tela).
-// O VSACESSO.tlpp (API-Acesso-main) precisa estar no RPO.
+// Acesso: SEM a trava U_VSAPIACE/MV_VSAPUSR desde 2026-11-18a, por pedido do
+// usuario (18/11/2026). Quem abre a tela pelo menu (U_LOGRELAPP) usa a API.
+// Nao depende mais do VSACESSO.tlpp.
 // Fonte em ASCII puro e LF; texto com acento sai por EncodeUTF8 (TxtOut).
 // ============================================================================
 
@@ -97,9 +98,6 @@ Pedidos de entrega: todos os sem nota + os com nota (TES de saida com estoque) d
 /*/
 @Get("/api/v1/vs-financial-data/logistica/pedidos")
 User Function getVsLogPedidos() as Logical
-   If !U_VSAPIACE(.T., "U_LOGRELAPP")
-      Return .T.
-   EndIf
 Return LerPedidos()
 
 Static Function LerPedidos()
@@ -194,9 +192,6 @@ Campo ausente no corpo = nao altera; texto vazio limpa.
 /*/
 @Put("/api/v1/vs-financial-data/logistica/pedidos/:recno")
 User Function putVsLogPedido() as Logical
-   If !U_VSAPIACE(.T., "U_LOGRELAPP")
-      Return .T.
-   EndIf
 Return GravaPedido()
 
 Static Function GravaPedido()
@@ -484,9 +479,6 @@ Pedidos pelo numero, sem filtro de periodo, TES, tipo ou residuo (importacao da 
 /*/
 @Post("/api/v1/vs-financial-data/logistica/pedidos/busca")
 User Function postVsLogBusca() as Logical
-   If !U_VSAPIACE(.T., "U_LOGRELAPP")
-      Return .T.
-   EndIf
 Return BuscaPedidos()
 
 Static Function BuscaPedidos()

@@ -7,7 +7,7 @@ Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("lo
 | API | `API/RESTLOGREL.tlpp` (TLPP, versão `LG_VERSAO`) |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`; também recebe da tela o pedido de impressão do DANFE) |
 | Tela | `app/`: Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4 |
-| Acesso | `U_VSAPIACE` (`..\API-Acesso-main\VSACESSO.tlpp`) + parâmetro `MV_VSAPUSR` |
+| Acesso | pelo menu (`U_LOGRELAPP`); a API não tem trava própria desde 18/11/2026 |
 | Criada em | 13/11/2026, no molde do PCPREL (`PO-UI-Protheus-main`) |
 
 ## Implantação na produção: por onde começar
@@ -29,14 +29,12 @@ Faça tudo **fora do expediente**, nesta ordem. A homologação já está funcio
 Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compatlogrelupdprw).
 
 **2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
-1. Se ainda não estiver no RPO da produção, compile `..\API-Acesso-main\VSACESSO.tlpp` (`U_VSAPIACE`).
-2. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-18a`).
-3. Compile `LOGRELAPP/LOGRELAPP.PRW`.
-4. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
+1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-18a`).
+2. Compile `LOGRELAPP/LOGRELAPP.PRW`.
+3. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
 
 **3. Dar acesso**
-1. Inclua `U_LOGRELAPP` no menu dos usuários da logística.
-2. Configure o `MV_VSAPUSR`. Com o parâmetro vazio, quem abre a tela pelo menu já tem acesso. Se ele estiver preenchido, inclua os usuários da logística.
+Inclua `U_LOGRELAPP` no menu dos usuários da logística. Não há outra configuração: a API não usa o `VSACESSO` nem o `MV_VSAPUSR`.
 
 **4. Conferir**
 1. Abra a tela e clique em **Diagnóstico**. Confira três coisas:
@@ -138,7 +136,7 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 | `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` | Grava os campos enviados no pedido (R_E_C_N_O_ da SC5) e devolve o pedido atualizado. |
 | `POST /api/v1/vs-financial-data/logistica/pedidos/busca` | `{"pedidos": [...]}`, até 500: pedidos pelo número, sem filtro (usada pela importação). |
 
-**Acesso:** as duas rotas chamam `U_VSAPIACE(.T., "U_LOGRELAPP")`. Passa quem está no `MV_VSAPUSR` ou tem `U_LOGRELAPP` no menu. Com o parâmetro vazio, o acesso é livre. **Erros:** saem no header `X-Erro`, porque o REST descarta o corpo das respostas 500.
+**Acesso:** as rotas não têm trava própria desde 18/11/2026 (o `U_VSAPIACE` foi retirado a pedido). O controle é o menu: só quem tem `U_LOGRELAPP` abre a tela. **Erros:** saem no header `X-Erro`, porque o REST descarta o corpo das respostas 500.
 
 ## Arquivos da tela (`app/src/app/`)
 
@@ -187,8 +185,7 @@ Pode rodar de novo: só cria o que falta. O arquivo guarda o registro inteiro do
 2. Compile, ou gere o patch, com estes arquivos:
    - `API/RESTLOGREL.tlpp`;
    - `LOGRELAPP/LOGRELAPP.PRW`;
-   - o recurso `app/dist/<ambiente>/logrel.app`;
-   - o `VSACESSO.tlpp`, se ainda não estiver no RPO.
-3. Inclua `U_LOGRELAPP` no menu e, se for o caso, o usuário no `MV_VSAPUSR`.
+   - o recurso `app/dist/<ambiente>/logrel.app`.
+3. Inclua `U_LOGRELAPP` no menu.
 
 Mudança só na tela exige recompilar apenas o `logrel.app`; mudança só na API, apenas o `RESTLOGREL.tlpp`. Cada pasta de patch (`API/`, `LOGRELAPP/`, `app/dist/homologacao/`, `app/dist/producao/`) contém só o arquivo que vai para o RPO: não coloque outros arquivos nelas. O TDS precisa de `.APP` em `totvsLanguageServer.folder.extensionsAllowed` para compilar o pacote.

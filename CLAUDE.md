@@ -7,7 +7,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 | API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`), versão `LG_VERSAO` = `2026-11-18a` | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
-| Acesso | `..\API-Acesso-main\VSACESSO.tlpp` (`U_VSAPIACE`) | sim, se ainda não estiver |
+| Acesso | só o menu (`U_LOGRELAPP`). O `U_VSAPIACE` saiu da API em 18/11/2026 (`2026-11-18a`) | não |
 
 Cada pasta de patch (`API/`, `LOGRELAPP/`, `app/dist/homologacao/`, `app/dist/producao/`) tem só o arquivo que vai para o RPO. Não criar outros arquivos nelas.
 
@@ -57,7 +57,7 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - `GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD` (padrão 365 dias, máximo 1100). A tela pede 01/01 do ano anterior até hoje.
 - `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` (R_E_C_N_O_ da SC5). Só os campos enviados; responde o pedido no formato do GET, sempre (busca pelo número, sem filtro).
 - `POST /api/v1/vs-financial-data/logistica/pedidos/busca` `{"pedidos": [...]}` (até 500): pedidos pelo número, **sem filtro** de período, TES, tipo ou resíduo; responde `{versao, pedidos, naoEncontrados}`. A importação usa para os pedidos da planilha que não vieram no GET (lotes de 400). Criada em 13/11/2026 (`2026-11-13c`), depois que o usuário recebeu "Pedido fora da consulta" e pediu que a importação "aceite todos".
-- As duas chamam `U_VSAPIACE(.T., "U_LOGRELAPP")`: passa quem está no `MV_VSAPUSR` ou tem a rotina no menu (vazio = libera).
+- **Sem trava de acesso na API** desde `2026-11-18a`. Pedido do usuário em 18/11/2026: "tire isso desse fonte VSACESSO ... as próximas APIs, não coloque, pergunte antes". Até a `2026-11-16a` as três rotas chamavam `U_VSAPIACE(.T., "U_LOGRELAPP")` (`MV_VSAPUSR` ou rotina no menu). **Não recolocar.** Em API nova, perguntar antes de pôr qualquer trava.
 
 ## Regras (decisões da 1ª versão, 13/11/2026 — a confirmar com o usuário)
 - **Base** (API `2026-11-13b`): item da SC6 com `C6_BLQ <> 'R'` e
@@ -168,7 +168,8 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - Causa provável: homologação e produção estão no **mesmo Oracle**. As 3 consultas ao `ALL_TAB_COLUMNS` (`ColunasExistentes`, `ObsSql`, `TemZ01`) não filtravam o `OWNER`. Na produção, as colunas `C5_Z*` (e a `Z01`) da homologação pareciam existir, a query usava coluna inexistente e a thread caía sem passar pelo Recover (500 sem `X-Erro`). Corrigido com `OWNER = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')` (`LG_OWNER`), o mesmo filtro do `RESTPANORAMAESTOQUE`. **Toda consulta nova ao dicionário do Oracle leva esse filtro.**
   - O `BuildErro` passou a mandar `Access-Control-Expose-Headers: X-Erro, X-Erro-Etapa`. A tela roda na porta do app e o REST em outra (CORS), então antes o navegador escondia o `X-Erro` e a tela só mostrava "Erro 500".
   - Se os campos ainda não foram criados na produção (`U_LOGRELUPD`), a tela abre com eles em "Campos que faltam na SC5" e sem edição.
-  - **Não testado no Protheus.** Se o 500 continuar sem mensagem, a queda é fora do Recover: conferir se o `VSACESSO.tlpp` (`U_VSAPIACE`) está no RPO da produção.
+  - Na mesma versão saiu o `U_VSAPIACE` das três rotas, a pedido do usuário (ver Rotas). A API não depende mais do `VSACESSO.tlpp`.
+  - **Não testado no Protheus.**
 
 ## Pendências
 - **18/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-18a` na produção (e na homologação) e conferir no Diagnóstico a versão e os campos que faltam.
@@ -193,7 +194,7 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - **Ordem na produção:**
     1. `LOGRELUPD` (fora do expediente);
     2. sair e entrar no Protheus;
-    3. `RESTLOGREL` + `LOGRELAPP` + `logrel.app` de produção + `VSACESSO`, se faltar.
+    3. `RESTLOGREL` + `LOGRELAPP` + `logrel.app` de produção.
   - `C5_ZFRETE` já existe na produção (o RESTPEDIDOS usa). Deve aparecer como "já existe"; se aparecer com outra definição, conferir à mão.
   - **18/11, exportação feita na homologação** (ambiente `romulo`, arquivo `C:\Protheus\logrelupd_01_20261118.json` na estação, fora do Git):
     - **Conteúdo:** 38 campos `C5_Z*` e 1 gatilho. Os 17 da API vieram todos.
