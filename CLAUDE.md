@@ -18,7 +18,7 @@ Decisão do usuário em 17/11/2026: o repositório `itsRomuloGarcia/LOGREL-POUI`
 | Estação | Pasta |
 |---|---|
 | Trabalho | `C:\totvs\LOGREL-POUI` (clone desde 17/11/2026; a cópia de zip `LOGREL-POUI-main` foi apagada) |
-| Casa | `C:\Users\Trabalho\Documents\Videosoft\LOGREL-POUI` (**migração pendente**, ver abaixo) |
+| Casa | `C:\Users\Trabalho\Documents\Videosoft\LOGREL-POUI` (clone desde 18/11/2026; a cópia `LOGREL-main` sem `.git` foi conferida e apagada) |
 
 **Sempre, nas duas estações:**
 - Antes de mexer, rodar `git pull`.
@@ -27,7 +27,7 @@ Decisão do usuário em 17/11/2026: o repositório `itsRomuloGarcia/LOGREL-POUI`
 - Nunca commitar credenciais (`.env`, `servers.json`, tokens, senhas). Também ficam fora do Git `Planilhas/` (dados reais da base), `node_modules/`, `.angular/` e `*.ptm`. A lista está no `.gitignore`.
 - Os arquivos vieram do upload com CRLF. Não normalizar o fim de linha do repositório inteiro, porque isso gera um diff enorme sem mudança real.
 
-**Migração na casa (fazer uma vez, no primeiro uso depois deste commit):**
+**Migração na casa (feita em 18/11/2026; mantida como referência):**
 1. Procurar a cópia antiga do LOGREL em `Documents\Videosoft` ou no lugar de onde foram feitos os uploads. Ela é uma pasta **sem `.git`**, por exemplo `LOGREL-POUI-main`.
 2. Clonar o repositório em `Documents\Videosoft\LOGREL-POUI`. Se a pasta já existir com `.git`, só rodar `git pull`.
 3. Comparar a cópia antiga com o clone, arquivo por arquivo:
