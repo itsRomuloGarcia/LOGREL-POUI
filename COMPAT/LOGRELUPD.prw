@@ -19,7 +19,9 @@ la, registro por registro do SX3 (e gatilhos do SX7), em vez de redigitada:
    que faltam (X3_ORDEM no fim da SC5), os gatilhos que faltam e roda o
    X31UpdTable("SC5") para criar as colunas no banco.
 
-Campo que ja existe na producao NUNCA e alterado (so aparece na previa).
+So cria os campos da logistica (lista Esperados, os que a RESTLOGREL usa) e
+os gatilhos deles: os outros C5_Z* do arquivo (faturamento, financeiro...)
+so aparecem na previa. Campo que ja existe na producao NUNCA e alterado.
 Pode rodar de novo: so cria o que falta.
 Texto do arquivo vai em Base64 (Encode64) para nao estragar os campos
 codificados do SX3 na troca de codificacao.
@@ -188,6 +190,8 @@ Static Function Importa()
    Local cDif   := ""
    Local cJa    := ""
    Local cFalta := ""
+   Local cFora  := ""
+   Local aCriar := {}
    Local cCampo := ""
    Local cLog   := ""
    Local nI     := 0
@@ -231,6 +235,13 @@ Static Function Importa()
          MsgStop("Campo inesperado no arquivo: " + cCampo + ". Nada foi alterado.", UP_TIT)
          Return
       EndIf
+      If aScan(aEsp, cCampo) == 0
+         // C5_Z* de outras rotinas (faturamento, financeiro...): nunca cria
+         If !SX3->(DbSeek(PadR(cCampo, Len(SX3->X3_CAMPO))))
+            cFora += cCampo + " "
+         EndIf
+         Loop
+      EndIf
       If SX3->(DbSeek(PadR(cCampo, Len(SX3->X3_CAMPO))))
          If SX3->X3_TIPO != Valor(aCpo[nI], "X3_TIPO") .or. ;
                SX3->X3_TAMANHO != Valor(aCpo[nI], "X3_TAMANHO") .or. ;
@@ -243,10 +254,11 @@ Static Function Importa()
          EndIf
       Else
          aAdd(aNovos, aCpo[nI])
+         aAdd(aCriar, cCampo)
          cPrev += "  " + cCampo + " " + Valor(aCpo[nI], "X3_TIPO") + " " + ;
             cValToChar(Valor(aCpo[nI], "X3_TAMANHO")) + ;
             IIf(Valor(aCpo[nI], "X3_DECIMAL") > 0, "," + cValToChar(Valor(aCpo[nI], "X3_DECIMAL")), "") + ;
-            " - " + AllTrim(Valor(aCpo[nI], "X3_TITULO")) + CRLF
+            " - " + AllTrim(Valor(aCpo[nI], "X3_TITULO")) + Pasta(Valor(aCpo[nI], "X3_FOLDER")) + CRLF
       EndIf
    Next nI
    For nI := 1 to Len(aEsp)
@@ -259,6 +271,10 @@ Static Function Importa()
    DbSelectArea("SX7")
    SX7->(DbSetOrder(1))
    For nI := 1 to Len(aGat)
+      // so gatilho de campo da logistica que vai ser criado agora
+      If aScan(aCriar, AllTrim(Valor(aGat[nI], "X7_CAMPO"))) == 0
+         Loop
+      EndIf
       If !SX7->(DbSeek(Valor(aGat[nI], "X7_CAMPO") + Valor(aGat[nI], "X7_SEQUENC")))
          aAdd(aGNov, aGat[nI])
       EndIf
@@ -267,10 +283,12 @@ Static Function Importa()
    cPrev := "Ambiente: " + GetEnvServer() + "  /  empresa " + cEmpAnt + CRLF + ;
       "Arquivo: " + cNome + " (de " + cValToChar(oJ["origem"]) + ", " + cValToChar(oJ["data"]) + ")" + CRLF + CRLF + ;
       "CRIAR " + cValToChar(Len(aNovos)) + " campo(s):" + CRLF + IIf(Empty(cPrev), "  nenhum" + CRLF, cPrev) + CRLF + ;
-      "Gatilhos (SX7) a criar: " + cValToChar(Len(aGNov)) + " de " + cValToChar(Len(aGat)) + CRLF + CRLF + ;
+      "Gatilhos (SX7) a criar: " + cValToChar(Len(aGNov)) + CRLF + CRLF + ;
       IIf(Empty(cDif), "", "JA EXISTEM COM OUTRA DEFINICAO (nao serao alterados, conferir a mao):" + CRLF + cDif + CRLF) + ;
       IIf(Empty(cJa), "", "Ja existem iguais (mantidos): " + cJa + CRLF + CRLF) + ;
-      IIf(Empty(cFalta), "", "ATENCAO, a API usa e nao vieram no arquivo: " + cFalta + CRLF + CRLF)
+      IIf(Empty(cFalta), "", "ATENCAO, a API usa e nao vieram no arquivo: " + cFalta + CRLF + CRLF) + ;
+      IIf(Empty(cFora), "", "Outros C5_Z* do arquivo que nao existem aqui (NAO sao da logistica, nao serao criados): " + ;
+      cFora + CRLF + CRLF)
 
    If Empty(aNovos) .and. Empty(aGNov)
       Aviso(UP_TIT + " - nada a criar", cPrev, {"Ok"}, 3)
@@ -360,6 +378,19 @@ Static Function Grava(aNovos, aGNov)
    End Sequence
    ErrorBlock(bErrOld)
 Return cLog
+
+// Pasta (SXA) daqui para a previa: " (pasta 3: Logistica)" ou aviso
+Static Function Pasta(cPasta)
+   cPasta := AllTrim(cPasta)
+   If Empty(cPasta)
+      Return ""
+   EndIf
+   DbSelectArea("SXA")
+   SXA->(DbSetOrder(1)) // XA_ALIAS+XA_ORDEM
+   If SXA->(DbSeek(UP_TAB + cPasta))
+      Return " (pasta " + cPasta + ": " + AllTrim(SXA->XA_DESCRIC) + ")"
+   EndIf
+Return " (pasta " + cPasta + " NAO existe aqui: fica sem pasta)"
 
 // Maior X3_ORDEM da tabela (0-9 < A-Z, entao a comparacao de texto serve)
 Static Function UltOrdem()

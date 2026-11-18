@@ -187,6 +187,16 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     2. sair e entrar no Protheus;
     3. `RESTLOGREL` + `LOGRELAPP` + `logrel.app` de produção + `VSACESSO`, se faltar.
   - `C5_ZFRETE` já existe na produção (o RESTPEDIDOS usa). Deve aparecer como "já existe"; se aparecer com outra definição, conferir à mão.
+  - **18/11, exportação feita na homologação** (ambiente `romulo`, arquivo `C:\Protheus\logrelupd_01_20261118.json` na estação, fora do Git):
+    - **Conteúdo:** 38 campos `C5_Z*` e 1 gatilho. Os 17 da API vieram todos.
+    - **Também vieram campos de outras rotinas:** `C5_ZUF`, `C5_ZNOMCLI`, `C5_ZBOLETO`, `C5_ZRECON` e outros. Por isso a importação passou a criar **só os campos de `Esperados()`** e os gatilhos deles. Os outros, se faltarem na produção, só aparecem na prévia. O único gatilho é o `C5_ZRECON` → `C5_ZRSERIE`, que não é da logística.
+    - **Definições confirmadas na homologação:**
+      - `C5_ZOBS` é **caracter 70**, não memo;
+      - os valores (`C5_ZVLRCTE`, `C5_ZVCTERE`) são N 12,2;
+      - as datas são D 8;
+      - os campos da logística ficam na **pasta 3** do SXA, e a prévia mostra o nome dessa pasta na produção;
+      - `C5_ZTPPEDI` (C 3, F3 `ZV` do SX5) é comercial e deve existir na produção.
+    - **`C5_ZPEDREN` está com C 5, mas o pedido tem 6 dígitos (`C5_NUM`).** A API corta no tamanho do campo, então o número do pedido do reenvio perde 1 dígito. Decisão do usuário pendente: corrigir para 6 na homologação e exportar de novo antes de importar na produção.
 - **15/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-15b` e o `logrel.app` juntos (homologação, depois produção). Conferir que espécie e pesos gravados pela tela aparecem no pedido (MATA410) e saem na NF-e.
 - Homologação funcionando desde 13/11/2026 (VSACESSO, RESTLOGREL, LOGRELAPP e logrel.app compilados). 1ª carga da planilha feita pelo usuário em 13/11/2026 (com pedidos recusados como "fora da consulta"). **A compilar juntos:** `RESTLOGREL.tlpp` `2026-11-13f` (inclui a `c`, a exclusão da remessa por conta e ordem (`d`), os retornos (`e`) e o `C5_FECENT` editável (`f`); o usuário cria `C5_ZDTRET`, `C5_ZMOTRET` e `C5_ZPEDREN`) (Previstos = todos sem NF, rota `/busca`, base com pedidos enviados) e o `logrel.app` regerado (reentrega, CTE da reentrega, indicador, busca dos pedidos fora da consulta). Com a API velha, a tela avisa que a busca falhou e esses pedidos ficam como "não encontrado". Conferir o desempenho do GET (o `NOT EXISTS` roda em toda a SC6 da filial).
 - Conferir no Diagnóstico se aparece "Campos que faltam na SC5" e se o combo do C5_ZTPMAT chega com D=Pedestal.
