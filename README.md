@@ -129,6 +129,20 @@ npm start                                          # http://localhost:4200
 
 O `proxy.conf.cjs` repassa `/api` para `LOGREL_REST` com Basic Auth.
 
+## Criar os campos na produção (`COMPAT/LOGRELUPD.prw`)
+
+Os campos `C5_Z*` foram criados à mão na homologação. O `U_LOGRELUPD` copia a definição de lá, em vez de redigitar:
+
+1. **Na homologação:** compile o `LOGRELUPD.prw`, rode `U_LOGRELUPD` pelo menu e escolha **Exportar**. Ele lê do SX3 todos os campos da SC5 que começam com `C5_Z` e os gatilhos SX7 desses campos. Depois grava `\logrelupd\LOGRELUPD_<empresa>_<data>.json` no servidor e copia esse arquivo para a pasta que você escolher. A tela lista os campos e avisa se faltar algum que a API usa.
+2. **Na produção, fora do expediente**, com ninguém usando pedidos de venda: compile o fonte, rode `U_LOGRELUPD` e escolha **Importar**. Escolha o arquivo e confira a prévia:
+   - campos a criar;
+   - campos que já existem iguais;
+   - campos que já existem com outro tipo ou tamanho, que **não são alterados**.
+   Confirmado, ele cria os campos que faltam no fim da SC5 (`X3_ORDEM` novo), cria os gatilhos que faltam e roda o `X31UpdTable("SC5")`. Depois confere as colunas no banco.
+3. Todos saem e entram de novo no Protheus. Depois disso, publique a API e a tela na produção.
+
+Pode rodar de novo: só cria o que falta. O arquivo guarda o registro inteiro do SX3, com `X3_USADO`, `X3_RESERV` e `X3_OBRIGAT` codificados, e o texto vai em Base64. Assim a definição chega igual à da homologação.
+
 ## Publicar no Protheus
 
 1. Gere o pacote, na pasta `app`: `powershell -ExecutionPolicy Bypass -File .\empacotar.ps1 -Ambiente homologacao`, ou `producao`. O resultado sai em `dist\<ambiente>\logrel.app`. O REST de cada ambiente já está no script (10557 e 10407); `-Rest <url>` troca o endereço.

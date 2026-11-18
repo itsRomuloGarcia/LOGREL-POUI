@@ -165,7 +165,28 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 
 ## Pendências
 - **16/11/2026:** compilar `RESTLOGREL.tlpp` `2026-11-16a` (séries), `LOGRELAPP.PRW` (só DANFE) e `logrel.app` (16/11 09:50). Conferir o DANFE de novo e as séries de um pedido com Z01 contra o RX Pedidos.
-- **Depois (pedido do usuário em 16/11/2026):** compatibilizador para criar os campos `C5_Z*` na produção copiando a definição da homologação (exportar SX3 → arquivo → importar + `X31UpdTable`), fonte separado, fora do expediente.
+- **18/11/2026, compatibilizador dos campos `C5_Z*`: `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`), não compilado nem testado.** Atende o pedido de 16/11.
+  - **Exportar (homologação):**
+    - pega todos os registros do SX3 com `X3_ARQUIVO = 'SC5'` e campo começando com `C5_Z`, com todas as colunas do registro;
+    - pega também os gatilhos SX7 dos campos com `X3_TRIGGER = 'S'`;
+    - cada coluna vai como `{"t": tipo, "v": valor}`, com texto em `Encode64`, para não estragar os campos codificados na troca de codificação;
+    - grava `\logrelupd\LOGRELUPD_<emp>_<AAAAMMDD>.json` no servidor e copia para uma pasta local (`cGetFile` + `CpyS2T`);
+    - avisa se faltar algum dos 17 campos que a API usa (`Esperados()`).
+  - **Importar (produção):**
+    - leva o arquivo local para o servidor (`CpyT2S`) e mostra a prévia: criar / já existe igual / já existe com outro tipo, tamanho ou decimal (nunca altera);
+    - cria só o que falta, com `X3_ORDEM` = `Soma1` do maior da SC5;
+    - se a pasta (`X3_FOLDER`) não existir no SXA, deixa o campo sem pasta; se a F3 não existir no SXB, só avisa;
+    - cria os gatilhos que faltam;
+    - fecha a SC5 e roda `X31UpdTable("SC5")`; depois confere as colunas por `TCStruct`.
+  - **Não testado no TOTVS Cloud:**
+    - o `RecLock` no SX3/SX7 (o `VSHISTUPD` usa o mesmo caminho e também não foi testado);
+    - o `cGetFile`/`CpyS2T` no SmartClient do usuário.
+  - **Se a cópia de arquivo falhar,** o JSON fica em `\logrelupd\` do servidor da homologação. Outra saída é o usuário mandar a lista da tela de exportação, para virar um compatibilizador com os campos fixos no fonte.
+  - **Ordem na produção:**
+    1. `LOGRELUPD` (fora do expediente);
+    2. sair e entrar no Protheus;
+    3. `RESTLOGREL` + `LOGRELAPP` + `logrel.app` de produção + `VSACESSO`, se faltar.
+  - `C5_ZFRETE` já existe na produção (o RESTPEDIDOS usa). Deve aparecer como "já existe"; se aparecer com outra definição, conferir à mão.
 - **15/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-15b` e o `logrel.app` juntos (homologação, depois produção). Conferir que espécie e pesos gravados pela tela aparecem no pedido (MATA410) e saem na NF-e.
 - Homologação funcionando desde 13/11/2026 (VSACESSO, RESTLOGREL, LOGRELAPP e logrel.app compilados). 1ª carga da planilha feita pelo usuário em 13/11/2026 (com pedidos recusados como "fora da consulta"). **A compilar juntos:** `RESTLOGREL.tlpp` `2026-11-13f` (inclui a `c`, a exclusão da remessa por conta e ordem (`d`), os retornos (`e`) e o `C5_FECENT` editável (`f`); o usuário cria `C5_ZDTRET`, `C5_ZMOTRET` e `C5_ZPEDREN`) (Previstos = todos sem NF, rota `/busca`, base com pedidos enviados) e o `logrel.app` regerado (reentrega, CTE da reentrega, indicador, busca dos pedidos fora da consulta). Com a API velha, a tela avisa que a busca falhou e esses pedidos ficam como "não encontrado". Conferir o desempenho do GET (o `NOT EXISTS` roda em toda a SC6 da filial).
 - Conferir no Diagnóstico se aparece "Campos que faltam na SC5" e se o combo do C5_ZTPMAT chega com D=Pedestal.
