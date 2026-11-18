@@ -171,6 +171,13 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - Na mesma versão saiu o `U_VSAPIACE` das três rotas, a pedido do usuário (ver Rotas). A API não depende mais do `VSACESSO.tlpp`.
   - **Não testado no Protheus.**
 
+- **18/11/2026, planilha `Planilhas/LOGÍSTICA181126.xlsx`** (aba "Página57", 3.732 linhas, as 11 colunas do modelo de importação; fora do Git):
+  - Separada com as regras do `importar.ts`/`montarPrevia`/`conferir` (sem a emissão, que precisa do Protheus):
+    - `LOGISTICA181126-importar.xlsx`: 3.547 linhas, com pedido e CTE como texto e datas dd/mm/aaaa. Em relação à `LOGISTICA2-importar.xlsx` de 13/11: 66 pedidos novos, 242 com mudança e 3.239 iguais (a tela pula os iguais).
+    - `LOGISTICA181126-analise.xlsx`: 182 linhas (168 de pedidos repetidos com dados diferentes, 9 entregas antes do envio, 1 data "17/04/26/26", 1 previsão antes do envio e os CTEs "G", `6584120"` e "OY794027905BR"). Uma segunda aba traz os avisos das linhas que vão na importação.
+  - Os **repetidos (78 pedidos)** são entregas parciais: o mesmo pedido sai em 2 ou 3 envios, com material, CTE e datas diferentes. A SC5 só guarda um envio e um CTE por pedido. **Regra a decidir com o usuário.** Outros 3 pedidos repetidos tinham linhas idênticas e vão uma vez só.
+  - 22 linhas trazem indicador sem par na lista reserva da tela: Material retido (13), Cliente trocou endereço (3), Loja em obra (3), Divergência de cubagem (1), Problema no CNPJ do cliente (1) e Recusa (1). Esses só gravam se existirem no X3_CBOX do `C5_ZINDICA`; senão, a prévia avisa e o resto da linha grava.
+
 ## Pendências
 - **18/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-18a` na produção (e na homologação) e conferir no Diagnóstico a versão e os campos que faltam.
 - **16/11/2026:** compilar `RESTLOGREL.tlpp` `2026-11-16a` (séries), `LOGRELAPP.PRW` (só DANFE) e `logrel.app` (16/11 09:50). Conferir o DANFE de novo e as séries de um pedido com Z01 contra o RX Pedidos.
