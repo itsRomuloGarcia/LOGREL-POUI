@@ -10,6 +10,42 @@ Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("lo
 | Acesso | `U_VSAPIACE` (`..\API-Acesso-main\VSACESSO.tlpp`) + parâmetro `MV_VSAPUSR` |
 | Criada em | 13/11/2026, no molde do PCPREL (`PO-UI-Protheus-main`) |
 
+## Implantação na produção: por onde começar
+
+Faça tudo **fora do expediente**, nesta ordem. A homologação já está funcionando, e o arquivo dos campos foi exportado em 18/11/2026 (`C:\Protheus\logrelupd_01_20261118.json`).
+
+**1. Criar os campos na SC5**
+1. Compile `COMPAT/LOGRELUPD.prw` na produção.
+2. Rode `U_LOGRELUPD` pelo menu, com ninguém usando pedidos de venda, e escolha **Importar**.
+3. Escolha o arquivo `.json` e confira a prévia. Ela deve mostrar:
+   - em "criar", os campos da logística que faltam (até 17);
+   - `C5_ZFRETE` em "já existem iguais", porque a tela de pedidos já usa esse campo;
+   - a pasta 3 com um nome que faça sentido na tela de pedidos.
+
+   Se algum campo aparecer em "já existe com outra definição", pare e confira. Se `C5_ZTPPEDI` aparecer em "criar", veja antes se a tabela `ZV` existe no SX5.
+4. Clique em **Criar**. No resultado, cada campo deve aparecer como "ok" no banco.
+5. Todos saem e entram de novo no Protheus.
+
+Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compatlogrelupdprw).
+
+**2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
+1. Se ainda não estiver no RPO da produção, compile `..\API-Acesso-main\VSACESSO.tlpp` (`U_VSAPIACE`).
+2. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-16a`).
+3. Compile `LOGRELAPP/LOGRELAPP.PRW`.
+4. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
+
+**3. Dar acesso**
+1. Inclua `U_LOGRELAPP` no menu dos usuários da logística.
+2. Configure o `MV_VSAPUSR`. Com o parâmetro vazio, quem abre a tela pelo menu já tem acesso. Se ele estiver preenchido, inclua os usuários da logística.
+
+**4. Conferir**
+1. Abra a tela e clique em **Diagnóstico**. Confira três coisas:
+   - o REST é o da porta 10407;
+   - a versão da API é `2026-11-16a`;
+   - "Campos que faltam na SC5" está vazio.
+2. Abra um pedido, grave uma data de envio de teste e apague depois. Imprima o DANFE de um pedido faturado.
+3. O `U_LOGRELUPD` pode rodar de novo, porque só cria o que falta. Se o `X31UpdTable` der erro, o dicionário já está gravado: rode de novo fora do expediente.
+
 ## Para que serve
 
 Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a transportadora e a data de saída, o faturamento emite a nota e a logística imprime as notas do e-mail e redigita cada envio na planilha ENVIOS 2026 (59 colunas, cerca de 19 envios por dia). A tela traz do Protheus o que ele já sabe e deixa para a logística só o transporte. Explicação completa, com imagens de dados fictícios, em `..\Comunicados\2026-11-logistica\Logistica - tela no Protheus.pdf`.
@@ -139,6 +175,8 @@ Os campos `C5_Z*` foram criados à mão na homologação. O `U_LOGRELUPD` copia 
    - campos que já existem iguais;
    - campos que já existem com outro tipo ou tamanho, que **não são alterados**.
    Confirmado, ele cria os campos que faltam no fim da SC5 (`X3_ORDEM` novo), cria os gatilhos que faltam e roda o `X31UpdTable("SC5")`. Depois confere as colunas no banco.
+
+   Só cria os 17 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
 3. Todos saem e entram de novo no Protheus. Depois disso, publique a API e a tela na produção.
 
 Pode rodar de novo: só cria o que falta. O arquivo guarda o registro inteiro do SX3, com `X3_USADO`, `X3_RESERV` e `X3_OBRIGAT` codificados, e o texto vai em Base64. Assim a definição chega igual à da homologação.
