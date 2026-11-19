@@ -1,0 +1,110 @@
+Assunto: Logística no Protheus: os envios saem da planilha
+
+Olá!
+
+Como foi feito na RX Pedidos, avançamos para a logística para “exterminar” a dependência de planilhas e ter uma única base de dados e de consulta: o Protheus.
+
+A tela Logística · Pedidos de entrega, aberta pelo menu do Protheus, passa a ser o lugar onde cada envio é acompanhado e registrado: da programação da saída até a entrega, com os custos de frete e o histórico de tudo o que foi alterado. Os envios que estavam na planilha ENVIOS 2026 já estão no Protheus, com rastreio de onde veio cada dado.
+
+Abaixo, como foi feito, o que a tela faz e os próximos passos. Os prints usam dados fictícios.
+
+
+1. RESUMO
+
+- Uma base só: Tudo fica no pedido de venda do Protheus e em duas tabelas novas. A planilha ENVIOS 2026 já foi importada.
+- Quadros: Em que etapa está cada pedido (previsto, faturado, enviado, entregue, retornado) e os alertas do dia.
+- Programação: As saídas de hoje e dos próximos dias, o botão Saiu, o DANFE e as entregas previstas para hoje.
+- Detalhe do pedido: Envio, entrega, reentrega, retorno, dados para a NF-e, telefone do cliente, itens e números de série.
+- Custos de frete: O CTE do envio, cada reentrega e as taxas extras, com a situação: OK, divergente, em contato, ajustado.
+- Histórico: Quem alterou o quê e quando, no pedido e em cada cobrança.
+- Lista, XLSX e indicadores: Consulta completa, planilha sob demanda e os números de prazo, transportadoras e frete.
+- API: Os mesmos dados podem ser lidos por outras ferramentas, como o CRM dos vendedores.
+
+
+2. COMO FOI FEITO: TUDO NO PROTHEUS
+
+Nada fica fora do Protheus. A tela lê e grava direto no pedido de venda e em duas tabelas novas, por uma API própria. Quem tem a rotina no menu abre a tela, sem outro cadastro e sem outra senha.
+
+- Pedido de venda (SC5): Campos novos na pasta da logística: data de envio, previsão de entrega da transportadora, data de entrega, tipo de material, gerou reentrega e nova data, indicador de atraso, observações da entrega e retorno (data, motivo e pedido do reenvio). Também espécie, pesos e volume, que precisam estar no pedido antes da NF-e.
+- Custos de frete (tabela nova): Uma linha por cobrança: o CTE do envio, cada reentrega, armazenagem, devolução e outras taxas, com o número do documento, a data, a transportadora, o valor, a situação, o valor esperado e uma observação.
+- Histórico da logística (tabela nova): Cada alteração feita pela tela, no pedido ou numa cobrança: o campo, o valor antes, o valor depois, o usuário, a data e a hora. Inclusões e exclusões de cobrança também ficam registradas.
+- O que o Protheus já tinha: Cliente, cidade e UF de entrega, telefone do cadastro, vendedor, transportadora, notas fiscais, itens, números de série e frete cobrado: a tela só lê, ninguém digita de novo.
+
+OS ENVIOS DA PLANILHA JÁ ESTÃO NO PROTHEUS
+A planilha ENVIOS 2026 foi importada pela própria tela: datas de envio, previsão e entrega, material, CTE e valor, reentregas e indicadores de atraso, de janeiro até agora. Depois, cada CTE foi copiado para a tabela de custos de frete e a soma foi conferida: o total dos CTEs no pedido e na tabela nova é o mesmo, centavo a centavo.
+No histórico, o que veio da planilha tem a marca Importação e cada CTE copiado, a marca Carga inicial. Daqui em diante, toda alteração fica registrada com o usuário, a data e a hora.
+
+A partir de agora, a planilha não precisa mais ser preenchida: o registro é feito na tela, no pedido.
+
+Bom saber:
+- Pedidos de remessa por conta e ordem não aparecem na tela: o transporte vai no pedido da venda.
+- Pedido que saiu em mais de uma entrega fica com um envio no pedido; os CTEs das outras saídas entram como cobranças em Custos de frete.
+- A importação de planilha continua disponível na tela, para uma carga pontual, mas o registro do dia a dia é feito direto no pedido.
+
+
+3. A TELA, ABA POR ABA
+
+Quadros
+Os pedidos em cinco colunas: previstos (todos os sem NF), faturados aguardando a saída, enviados, entregues e retornados. Cada coluna tem a sua ordem (mais antigos ou mais novos primeiro).
+No topo, os alertas: em trânsito atrasados, vencem em até 2 dias, faturados parados, sem previsão da transportadora, sem dados para a NF-e, aguardando reenvio e custo de frete em divergência. A busca acha o pedido pelo número, cliente, cidade, NF, CTE, número de série ou telefone.
+[imagem: 01-quadros.png]
+
+Programação
+As saídas por dia, pela data de saída programada do pedido: não saíram, hoje, os próximos dias úteis e sem programação. Para reprogramar, basta arrastar o cartão para outro dia. O botão Saiu grava a data de envio de hoje, e o DANFE imprime a nota direto do cartão.
+[imagem: 02-programacao.png]
+
+Mais abaixo, as entregas previstas para hoje: os pedidos em trânsito com a previsão da transportadora para hoje. O botão Entregue grava a data de entrega de hoje (a nova data, quando houve reentrega) e o pedido passa para Entregues.
+[imagem: 02b-entregas-hoje.png]
+
+Detalhe do pedido
+Um clique no pedido abre o detalhe. No topo, cada nota fiscal com o botão Imprimir DANFE. Depois, o formulário: dados para a NF-e (antes da nota), envio e entrega, custos de frete, reentrega e retorno. Salvar grava só o que mudou.
+[imagem: 03a-detalhe.png]
+
+Custos de frete
+Logo abaixo de “Envio e entrega”, a lista das cobranças do pedido com o total. Um pedido pode ter várias: o CTE do envio, cada reentrega, armazenagem, devolução ou outra taxa.
+Quando o CTE chega com valor diferente do combinado, a cobrança é marcada como Divergente, com o valor esperado e uma observação do contato com a transportadora. Depois vira Em contato, Ajustado ou Aceito como veio. O alerta dos Quadros e o filtro “Custo de frete em divergência” mostram tudo o que ainda está em aberto.
+[imagem: 03b-custos.png]
+
++ Adicionar cobrança e Editar abrem o formulário ali mesmo e gravam na hora, sem fechar o pedido. A exclusão pede confirmação e fica registrada no histórico.
+[imagem: 03c-custo-editar.png]
+
+Histórico de alterações
+No fim do detalhe, o histórico do pedido: cada campo alterado, de quanto para quanto, por quem e quando. O que veio da planilha aparece como Importação, e os CTEs copiados para a tabela nova, como Carga inicial.
+[imagem: 03d-historico.png]
+
+Cliente, frete e itens
+O frete cobrado no pedido contra o custo das cobranças, os dados do cliente com o telefone do cadastro (com link para discar) e os itens com os números de série.
+[imagem: 03e-cliente-itens.png]
+
+Lista completa e Exportar XLSX
+A Lista completa traz um item por linha, com todas as colunas e ordenação.
+[imagem: 04-lista.png]
+
+O botão Exportar XLSX gera a planilha na hora, escolhendo o que sai: todos, previstos, faturados, enviados, entregues, atrasados, retornados ou com custo em divergência, com ou sem os filtros da tela. As abas são Pedidos, Itens e Custos de frete, em formato de tabela do Excel. A planilha passa a ser só uma saída: a base é o Protheus.
+[imagem: 05-exportar-xlsx.png]
+
+Indicadores
+Entregas no prazo e atrasadas por mês (pela previsão da transportadora), motivos dos atrasos, comparação e ranking das transportadoras (% no prazo, atraso médio, tempo de entrega, custo médio, % reentrega, % com custo em divergência) e o frete acumulado por transportadora.
+[imagem: 06-indicadores.png]
+
+E o custo de frete × frete cobrado por mês, com os pedidos em que o custo passou do cobrado do cliente. O custo soma todas as cobranças: CTE, reentregas e taxas.
+[imagem: 07-custo-x-cobrado.png]
+
+
+4. OS DADOS TAMBÉM SAEM DO PROTHEUS, POR API
+
+Como tudo está no Protheus e é servido por uma API, outras ferramentas podem ler os mesmos dados, sem planilha e sem digitar de novo.
+
+Um exemplo é o CRM: dentro do cliente, o vendedor consulta onde está cada pedido, se já saiu, a transportadora, a nota, o CTE, a previsão e a data de entrega. Ele acompanha a entrega sem precisar perguntar à logística, e todo mundo olha para o mesmo dado.
+
+
+5. PRÓXIMO PASSO: APIS DAS TRANSPORTADORAS
+
+O próximo passo é integrar as APIs das transportadoras:
+- Rastreio: a situação da entrega e a data de entrega vêm da transportadora, sem digitação, e o atraso aparece na hora;
+- Cotação: o frete é cotado antes da saída e o valor combinado fica gravado. Ele vira o valor esperado na conferência do CTE, e a divergência passa a ser apontada automaticamente.
+
+
+Qualquer dúvida ou ajuste, é só me chamar.
+
+Fico à disposição.

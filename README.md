@@ -160,6 +160,12 @@ Sem as tabelas ZLC e ZLH no ambiente, a API funciona como antes (CTE na SC5, sem
 
 **Acesso:** as rotas não têm trava própria desde 18/11/2026 (o `U_VSAPIACE` foi retirado a pedido). O controle é o menu: só quem tem `U_LOGRELAPP` abre a tela. **Erros:** saem no header `X-Erro`, porque o REST descarta o corpo das respostas 500.
 
+## Comunicados
+
+| Pasta | Conteúdo |
+|---|---|
+| [`Comunicados/2026-11-apresentacao-logistica/`](Comunicados/2026-11-apresentacao-logistica/README.md) | Apresentação da tela (19/11/2026): e-mail pronto para o Gmail (`email-gmail.html`), HTML, texto, PDF, prints com dados fictícios e os scripts para refazer. Explica como foi feito (SC5, custos de frete, histórico), a planilha já no Protheus, a tela aba por aba, a leitura por API (CRM) e o próximo passo (APIs das transportadoras). |
+
 ## Arquivos da tela (`app/src/app/`)
 
 | Arquivo | Conteúdo |

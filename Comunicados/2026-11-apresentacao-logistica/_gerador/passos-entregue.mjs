@@ -1,0 +1,15 @@
+await cmd('Page.enable');
+await cmd('Runtime.enable');
+await tela(1440, 1000);
+await cmd('Page.navigate', { url: 'http://localhost:4298/' });
+await ate(`document.querySelectorAll('.cartao').length > 5`, 90000);
+await espera(1000);
+await clica('[data-tela="programacao"]');
+await espera(1200);
+await ev(`(()=>{const h=[...document.querySelectorAll('h2')].find(h=>h.textContent.includes('Entregas previstas para hoje')); h.closest('section').id='sec-ent'; return true})()`);
+console.log('botoes Entregue:', await ev(`[...document.querySelectorAll('#sec-ent button')].filter(b=>b.textContent.trim()==='Entregue').length`));
+await tela(1440, 2600);
+await espera(600);
+await shot('02b-entregas-hoje.png', '#sec-ent', 0);
+console.log('erros JS:', erros.length ? erros : 'nenhum');
+ws.close(); chrome.kill(); process.exit(0);
