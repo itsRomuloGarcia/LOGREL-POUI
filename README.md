@@ -59,7 +59,9 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 
 ## O que a tela faz
 
-**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Importar planilha** e **Diagnóstico**. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
+**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
+
+**Exportar XLSX:** abre uma janela para escolher o que sai na planilha: todos os pedidos, previstos, faturados aguardando saída, enviados (em trânsito), entregues, atrasados (em trânsito e entregues com atraso), retornados ou com custo de frete em divergência, cada um com a contagem. Dá para aplicar ou não os filtros do topo e escolher as abas: **Pedidos** (uma linha por pedido, com todos os dados de logística e frete), **Itens** (uma linha por item, com NF e números de série) e **Custos de frete** (uma linha por cobrança). Cada aba sai como tabela do Excel, fonte Tahoma 10, com datas e valores como data e número. O gerador (`xlsx.ts`) é o mesmo do RX Pedidos, já usado dentro do Protheus. A Lista completa continua com o CSV. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
 **Abas:**
 - **Quadros:** as colunas das etapas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio, custo de frete em divergência). O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
@@ -83,9 +85,9 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
-Abaixo do formulário ficam dois blocos, fechados até o clique:
-- **Custos de frete:** a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
-- **Histórico de alterações:** quem mudou o quê e quando, no pedido e nas cobranças (antes → depois), marcando o que veio da importação e da carga inicial.
+Dois blocos de frete e histórico:
+- **Custos de frete**, logo abaixo de "Envio e entrega" e sempre visível (pedido do usuário em 19/11/2026): a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
+- **Histórico de alterações**, no fim da gaveta e fechado até o clique: quem mudou o quê e quando, no pedido e nas cobranças (antes → depois), marcando o que veio da importação e da carga inicial.
 
 **Importar planilha** (atualização em massa):
 1. Cole as células do Excel, com a linha de títulos, ou escolha um CSV.
@@ -163,6 +165,7 @@ Sem as tabelas ZLC e ZLH no ambiente, a API funciona como antes (CTE na SC5, sem
 | `painel.ts` | A tela inteira: quadros, programação, lista, indicadores, gaveta (com os botões da NF) e importação. |
 | `importar.ts` | Leitura da planilha: separadores, títulos, datas, números e combos. |
 | `log.service.ts` | Chamadas da API (pedidos, custos, histórico) e mensagens de erro. |
+| `xlsx.ts` | Gera o .xlsx no navegador, sem biblioteca (cópia do RX Pedidos). |
 | `graficos.ts` | Gráficos (copiado do PCPREL). |
 | `app.ts` | Casca: carga, Diagnóstico e chamada do DANFE (`jsToAdvpl` → `JsToAdvpl` do `LOGRELAPP.PRW`). |
 | `token.interceptor.ts` | Renova o token pelo REST do ambiente. |

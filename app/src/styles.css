@@ -530,3 +530,19 @@ html, body { margin: 0; background: var(--bg); }
 .rx ul.hist li { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .rx ul.hist li:last-child { border-bottom: 0; }
 .rx ul.hist .h-quem { font-size: 12px; color: var(--muted); }
+
+/* Custos dentro do formulario (19/11/2026, 2a) e Exportar XLSX */
+.rx .grupo-custos .resumo-custos { margin: 0; font-size: 13px; }
+.rx .cform { margin: 10px 0 2px; border: 1px dashed var(--accent); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
+.rx .cform-tit { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); font-weight: 800; margin-bottom: 8px; }
+.rx .cform-grade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
+.rx .cform-grade .inteiro { grid-column: 1 / -1; }
+@media (max-width: 760px) { .rx .cform-grade { grid-template-columns: minmax(0, 1fr); } }
+.rx #lg-xlsx { display: flex; flex-direction: column; gap: 12px; }
+.rx .xl-grupo { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.rx .xl-grupo legend { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 800; padding: 0 6px; }
+.rx .xl-op { display: flex; gap: 8px; align-items: baseline; font-size: 13.5px; cursor: pointer; }
+.rx .xl-op > .muted { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rx .xl-op i.muted { font-style: normal; }
+.rx .modal.xl { width: min(620px, calc(100% - 32px)); }
+.rx .modal.xl .corpo { display: block; }

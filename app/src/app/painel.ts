@@ -1,5 +1,6 @@
 import * as G from './graficos';
 import { autoMapa, baixar, celulaCsv, dataIso, Destino, DESTINOS, DESTINOS_IMP, lerArquivo, lerTabela, numBR, numPedido, opcaoDe, semValor, simNao } from './importar';
+import { AbaXlsx, baixar as baixarXlsx, gerarXlsx } from './xlsx';
 import { Custo, CustoEdicao, HistLinha, ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.service';
 
 // Tela Logistica (pedidos de entrega): Quadros (previstos, faturados, enviados,
@@ -330,6 +331,8 @@ export class Painel {
   private custoEdit: string | null = null;
   private custosAbertos = false;
   private salvandoCusto = false;
+  /** janela do Exportar XLSX (aberta) */
+  private xl: { recorte: string; filtros: boolean; abas: Set<string> } | null = null;
   /** historico do pedido aberto (lido ao abrir o bloco) */
   private hist: { pedido: string; linhas: HistLinha[] | null; erro: string } | null = null;
   private tAviso = 0;
@@ -378,6 +381,7 @@ export class Painel {
           <div class="marca"><img class="logo" src="assets/vs_logo.png" alt="Videosoft"><div class="titulo"><h1>Logística · Pedidos de entrega</h1><span id="lg-sub"></span></div></div>
           <div class="acoes">
             <button class="btn pri" data-acao="consultar">Atualizar dados</button>
+            <button class="btn" data-acao="xlsx">Exportar XLSX</button>
             <button class="btn" data-acao="importar">Importar planilha</button>
             <button class="btn" data-acao="diag">Diagnóstico</button>
             ${api.fechar ? '<button class="btn" data-acao="sair">Fechar</button>' : ''}
@@ -1407,6 +1411,7 @@ export class Painel {
               ${combo('indicador', 'Indicador de atraso', this.op('indicador'), p.indicador)}
               <div class="campo inteiro"><label for="f-obsEntrega">Observações da entrega</label><textarea id="f-obsEntrega" data-f="obsEntrega" rows="3" ${tam[CAMPO.obsEntrega] ? `maxlength="${tam[CAMPO.obsEntrega]}"` : ''} placeholder="Texto livre: horário de recebimento, contato, acesso…" ${dis('obsEntrega')} ${tit('obsEntrega')}>${esc(p.obsEntrega || '')}</textarea></div>
             </fieldset>
+            ${comCustos ? `<div id="lg-custos">${this.custosHtml(r)}</div>` : ''}
             ${comCustos ? '' : `<fieldset class="grupo-f"><legend>CTE da transportadora</legend>
               ${texto('cte', 'Número do CTE', p.cte)}
               ${num('valorCte', 'Valor do CTE (R$)', p.valorCte)}
@@ -1427,7 +1432,6 @@ export class Painel {
             </fieldset>
             <ul class="avisos-f" id="lg-avisos" aria-live="polite"></ul>
           </form>
-          ${comCustos ? `<div id="lg-custos">${this.custosHtml(r)}</div>` : ''}
 
           <section id="lg-frete">${this.freteHtml(r)}</section>
 
@@ -1457,6 +1461,190 @@ export class Painel {
       </aside>`;
     this.atualizarForm();
   }
+
+  // ---------- Exportar XLSX (19/11/2026, pedido do usuario) ----------
+  /** Recortes do Exportar XLSX: [id, texto, filtro] */
+  private recortesXlsx(): [string, string, (r: Reg) => boolean][] {
+    const lista: [string, string, (r: Reg) => boolean][] = [
+      ['todos', 'Todos os pedidos', () => true],
+      ['prev', 'Previstos (sem NF)', (r) => r.et === 'prev'],
+      ['fat', 'Faturados, aguardando saída', (r) => r.et === 'fat'],
+      ['env', 'Enviados (em trânsito)', (r) => r.et === 'env'],
+      ['ent', 'Entregues', (r) => r.et === 'ent'],
+      ['atr', 'Atrasados (em trânsito e entregues com atraso)', (r) => r.prazo === 'atrasado'],
+      ['ret', 'Retornados', (r) => r.et === 'ret'],
+    ];
+    if (this.temCustos) lista.push(['div', 'Com custo de frete em divergência', (r) => r.nDiv > 0]);
+    return lista;
+  }
+
+  private abrirXlsx(): void {
+    if (!this.regs.length) {
+      this.aviso('Nenhum pedido carregado para exportar.', true);
+      return;
+    }
+    const g = ler<{ recorte?: string; filtros?: boolean; abas?: string[] }>('xlsx', {});
+    this.fecharModal();
+    this.xl ={ recorte: g.recorte || 'todos', filtros: g.filtros ?? true, abas: new Set(g.abas?.length ? g.abas : ['ped', 'itens', 'custos']) };
+    this.desenharXlsx();
+  }
+
+  /** Pedidos do recorte escolhido (com ou sem os filtros do topo) */
+  private regsXlsx(recorte: string, filtros: boolean): Reg[] {
+    const f = this.recortesXlsx().find(([id]) => id === recorte)?.[2] || (() => true);
+    return (filtros ? this.base() : this.regs).filter(f).sort((a, b) => a.p.pedido.localeCompare(b.p.pedido));
+  }
+
+  private desenharXlsx(): void {
+    const x = this.xl;
+    if (!x) return;
+    const filtrosAtivos = this.base().length !== this.regs.length;
+    const recs = this.recortesXlsx()
+      .map(([id, txt]) => {
+        const n = this.regsXlsx(id, x.filtros).length;
+        return `<label class="xl-op"><input type="radio" name="xl-rec" value="${id}" ${x.recorte === id ? 'checked' : ''}><span>${esc(txt)}</span><span class="muted">${n0(n)} pedido${n === 1 ? '' : 's'}</span></label>`;
+      })
+      .join('');
+    const abas: [string, string][] = [
+      ['ped', 'Pedidos: uma linha por pedido, com todos os dados de logística e frete'],
+      ['itens', 'Itens: uma linha por item do pedido (produto, quantidade, NF, números de série)'],
+    ];
+    if (this.temCustos) abas.push(['custos', 'Custos de frete: uma linha por cobrança (CTE, reentregas, taxas)']);
+    const sel = this.regsXlsx(x.recorte, x.filtros);
+    const nItens = sel.reduce((s, r) => s + (r.p.itens || []).length, 0);
+    const nCus = sel.reduce((s, r) => s + (r.p.custos || []).length, 0);
+    const vazio = !sel.length || !abas.some(([k]) => x.abas.has(k));
+    const corpo = `<div id="lg-xlsx">
+      <fieldset class="xl-grupo"><legend>O que exportar</legend>${recs}</fieldset>
+      <label class="xl-op"><input type="checkbox" name="xl-filtros" ${x.filtros ? 'checked' : ''}><span>Aplicar os filtros da tela (busca, transportadora, UF, material, tipo, situação e datas)${filtrosAtivos ? '' : ' <i class="muted">· nenhum filtro ativo agora</i>'}</span></label>
+      <fieldset class="xl-grupo"><legend>Abas da planilha</legend>${abas.map(([k, t]) => `<label class="xl-op"><input type="checkbox" name="xl-aba" value="${k}" ${x.abas.has(k) ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}</fieldset>
+      <p class="nota">${n0(sel.length)} pedidos · ${n0(nItens)} itens${this.temCustos ? ` · ${n0(nCus)} cobranças de frete` : ''}. Cada aba sai como tabela do Excel (filtro e listras), fonte Tahoma 10.</p>
+    </div>`;
+    this.el.camada.querySelectorAll('.modal, .fundo-modal').forEach((m) => m.remove());
+    this.el.camada.insertAdjacentHTML(
+      'beforeend',
+      `<div class="fundo fundo-modal" data-acao="fechar-modal"></div><div class="modal xl" role="dialog" aria-modal="true" aria-label="Exportar XLSX"><header><h2>Exportar planilha (XLSX)</h2><p>Dados carregados na tela (consulta de ${fmt(this.resp?.de || '')} a ${fmt(this.resp?.ate || '')} para os pedidos com NF; os sem NF vêm todos).</p></header><div class="corpo">${corpo}</div><footer><button type="button" class="btn" data-acao="fechar-modal">Cancelar</button><button type="button" class="btn pri" data-acao="xlsx-gerar" ${vazio ? 'disabled' : ''}>Exportar</button></footer></div>`,
+    );
+  }
+
+  private gerarXlsxArquivo(): void {
+    const x = this.xl;
+    if (!x) return;
+    const sel = this.regsXlsx(x.recorte, x.filtros);
+    if (!sel.length) return;
+    const cus = this.temCustos;
+    const sn = (v: string) => (v === 'SIM' ? 'Sim' : v === 'NAO' ? 'Não' : v);
+    const tr = (p: Pedido) => p.transportadoraNome || p.transportadora;
+    const abas: AbaXlsx[] = [];
+    if (x.abas.has('ped')) {
+      const col: [string, 'txt' | 'num' | 'data', (r: Reg) => string | number][] = [
+        ['Pedido', 'txt', (r) => r.p.pedido],
+        ['Quadro', 'txt', (r) => ET[r.et].curto],
+        ['Situação da entrega', 'txt', (r) => PRAZO_TXT[r.prazo]],
+        ['Dias de atraso', 'num', (r) => (r.prazo === 'atrasado' && r.atraso !== null ? r.atraso : '')],
+        ['Emissão', 'data', (r) => r.p.emissao],
+        ['Tipo de pedido', 'txt', (r) => this.txtOp('tipoPedido', r.p.tipoPedido)],
+        ['Cliente', 'txt', (r) => r.p.cliente],
+        ['Loja', 'txt', (r) => r.p.loja],
+        ['Nome', 'txt', (r) => r.p.nome],
+        ['Nome fantasia', 'txt', (r) => r.p.fantasia],
+        ['Grupo do cliente', 'txt', (r) => r.p.grupo],
+        ['Cidade de entrega', 'txt', (r) => r.p.cidade],
+        ['UF', 'txt', (r) => r.p.uf],
+        ['Vendedor', 'txt', (r) => r.p.vendedor],
+        ['Cód. transportadora', 'txt', (r) => r.p.transportadora],
+        ['Transportadora', 'txt', (r) => r.p.transportadoraNome],
+        ['Notas fiscais', 'txt', (r) => (r.p.notas || []).join(', ')],
+        ['Faturamento', 'data', (r) => r.p.dataFaturamento],
+        ['Saída programada', 'data', (r) => r.p.previsaoSaida],
+        ['Envio', 'data', (r) => r.p.dataEnvio],
+        ['Previsão de entrega', 'data', (r) => r.p.dataPrevisao],
+        ['Data de entrega', 'data', (r) => r.p.dataEntrega],
+        ['Gerou reentrega', 'txt', (r) => sn(r.p.reentrega)],
+        ['Nova data de entrega', 'data', (r) => r.p.dataNovaEntrega],
+        ['Entrega final', 'data', (r) => r.entFinal],
+        ['Indicador de atraso', 'txt', (r) => this.txtOp('indicador', r.p.indicador)],
+        ['Tipo de material', 'txt', (r) => this.txtOp('tipoMaterial', r.p.tipoMaterial)],
+        ['Data do retorno', 'data', (r) => r.p.dataRetorno || ''],
+        ['Motivo do retorno', 'txt', (r) => this.txtOp('motivoRetorno', r.p.motivoRetorno || '')],
+        ['Pedido do reenvio', 'txt', (r) => r.p.pedidoReenvio || ''],
+        ['Volume', 'num', (r) => r.p.volume || ''],
+        ['Espécie', 'txt', (r) => r.p.especie || ''],
+        ['Peso líquido', 'num', (r) => r.p.pesoLiquido || ''],
+        ['Peso bruto', 'num', (r) => r.p.pesoBruto || ''],
+        ['Quantidade (un)', 'num', (r) => r.qtd],
+        ['Valor dos itens', 'num', (r) => r.valor],
+        ['Frete destacado', 'num', (r) => r.p.frete || 0],
+        ['Frete não destacado', 'num', (r) => r.p.freteNaoDestacado || 0],
+        ['Frete cobrado', 'num', (r) => r.cobrado],
+        ...(cus
+          ? ([
+              ['CTEs', 'txt', (r: Reg) => r.ctes.join(' / ')],
+              ['Cobranças de frete', 'num', (r: Reg) => (r.p.custos || []).length],
+              ['Custo de frete', 'num', (r: Reg) => r.custo],
+              ['Cobranças em divergência', 'num', (r: Reg) => r.nDiv || ''],
+              ['Acima do esperado', 'num', (r: Reg) => r.difDiv || ''],
+            ] as [string, 'txt' | 'num' | 'data', (r: Reg) => string | number][])
+          : ([
+              ['CTE', 'txt', (r: Reg) => r.p.cte],
+              ['Valor do CTE', 'num', (r: Reg) => r.p.valorCte || 0],
+              ['CTE da reentrega', 'txt', (r: Reg) => r.p.cteReentrega],
+              ['Valor do CTE da reentrega', 'num', (r: Reg) => r.p.valorCteReentrega || 0],
+              ['Custo de frete', 'num', (r: Reg) => r.custo],
+            ] as [string, 'txt' | 'num' | 'data', (r: Reg) => string | number][])),
+        ['Cobrado − custo', 'num', (r) => (r.custo ? Math.round((r.cobrado - r.custo) * 100) / 100 : '')],
+        ['Observações da entrega', 'txt', (r) => r.p.obsEntrega || ''],
+      ];
+      abas.push({ nome: 'Pedidos', tabela: 'Pedidos', colunas: col.map(([t, tipo]) => ({ t, tipo })), linhas: sel.map((r) => col.map(([, , f]) => f(r))) });
+    }
+    if (x.abas.has('itens')) {
+      const linhas: (string | number)[][] = [];
+      sel.forEach((r) =>
+        (r.p.itens || []).forEach((i) =>
+          linhas.push([r.p.pedido, i.item, ET[r.et].curto, r.p.fantasia || r.p.nome, tr(r.p), i.produto, i.descricao, i.quantidade, i.entregue, i.valor, i.tes, i.descTes, i.nota, i.nota ? i.serie : '', i.dataFat, (i.numerosSerie || []).map((s) => s[0]).join(', '), r.p.dataEnvio, r.entFinal]),
+        ),
+      );
+      abas.push({
+        nome: 'Itens',
+        tabela: 'Itens',
+        colunas: [
+          { t: 'Pedido' }, { t: 'Item' }, { t: 'Quadro' }, { t: 'Cliente' }, { t: 'Transportadora' }, { t: 'Produto' }, { t: 'Descrição' },
+          { t: 'Quantidade', tipo: 'num' }, { t: 'Entregue', tipo: 'num' }, { t: 'Valor', tipo: 'num' }, { t: 'TES' }, { t: 'Descrição da TES' },
+          { t: 'NF' }, { t: 'Série da NF' }, { t: 'Data da NF', tipo: 'data' }, { t: 'Números de série' }, { t: 'Envio', tipo: 'data' }, { t: 'Entrega final', tipo: 'data' },
+        ],
+        linhas,
+      });
+    }
+    if (cus && x.abas.has('custos')) {
+      const linhas: (string | number)[][] = [];
+      sel.forEach((r) =>
+        (r.p.custos || []).forEach((c) => {
+          const dif = EM_ABERTO.includes(c.situacao) && c.valorEsperado > 0 ? Math.round((c.valor - c.valorEsperado) * 100) / 100 : '';
+          linhas.push([r.p.pedido, c.item, this.txtCusto('tipoCusto', c.tipo), c.cte, c.data, c.transportadoraNome || c.transportadora, c.valor, this.txtCusto('situacaoCusto', c.situacao), c.valorEsperado || '', dif, c.obs, c.usuario, c.alteradoEm, r.p.fantasia || r.p.nome, ET[r.et].curto, r.p.dataEnvio]);
+        }),
+      );
+      abas.push({
+        nome: 'Custos de frete',
+        tabela: 'Custos',
+        colunas: [
+          { t: 'Pedido' }, { t: 'Item' }, { t: 'Tipo' }, { t: 'CTE / documento' }, { t: 'Data', tipo: 'data' }, { t: 'Transportadora' },
+          { t: 'Valor cobrado', tipo: 'num' }, { t: 'Situação' }, { t: 'Valor esperado', tipo: 'num' }, { t: 'Diferença', tipo: 'num' },
+          { t: 'Observação' }, { t: 'Alterado por' }, { t: 'Alterado em' }, { t: 'Cliente' }, { t: 'Quadro' }, { t: 'Envio', tipo: 'data' },
+        ],
+        linhas,
+      });
+    }
+    if (!abas.length) return;
+    try {
+      const rec = x.recorte === 'todos' ? 'todos' : x.recorte;
+      baixarXlsx(gerarXlsx(abas), `logistica-${rec}-${iso(this.hoje)}.xlsx`);
+      this.aviso(`Planilha gerada: ${n0(sel.length)} pedidos${abas.length > 1 ? `, ${abas.length} abas` : ''}.`);
+      this.fecharModal();
+    } catch (e) {
+      this.aviso(`Não foi possível gerar a planilha: ${String(e)}`, true);
+    }
+  }
+
 
   // ---------- Custos de frete (ZLC) e historico (ZLH), API 2026-11-19a ----------
   /** Frete cobrado x custo (bloco "Frete" da gaveta) */
@@ -1505,9 +1693,11 @@ export class Painel {
       ? `<div class="tabela-wrap"><table class="custos"><thead><tr><th>Item</th><th>Tipo</th><th>CTE / doc.</th><th>Data</th><th>Transportadora</th><th class="dir">Valor</th><th>Situação</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`
       : '<p class="muted">Lance aqui o CTE do envio e cada cobrança extra: reentrega, armazenagem, devolução, outras taxas.</p>';
     const form = this.custoEdit !== null ? this.custoForm(r, lista.find((c) => c.item === this.custoEdit)) : `<p><button type="button" class="btn" data-acao="custo-novo" ${this.salvandoCusto ? 'disabled' : ''}>+ Adicionar cobrança</button></p>`;
-    return `<details class="bloco-d" id="lg-custos-d" ${this.custosAbertos || this.custoEdit !== null ? 'open' : ''}>
-      <summary data-acao="custos"><b>Custos de frete</b> <span class="muted">${resumo}</span></summary>
-      ${tabela}${form}</details>`;
+    // grupo do formulario, sempre aberto (pedido do usuario, 19/11/2026): os
+    // botoes sao type="button" e os campos nao tem data-f (nao entram no PUT)
+    return `<fieldset class="grupo-f grupo-custos"><legend>Custos de frete</legend>
+      <p class="inteiro resumo-custos">${resumo}</p>
+      <div class="inteiro">${tabela}${form}</div></fieldset>`;
   }
 
   /** Formulario de uma cobranca (nova ou em edicao) */
@@ -1521,8 +1711,9 @@ export class Painel {
     const tr = v.transportadora ? `${v.transportadora} - ${transps.find(([k]) => k === v.transportadora)?.[1] || v.transportadoraNome || ''}` : '';
     const ops = (o: Opcao[], sel: string, vazio = '') => `${vazio ? `<option value="">${esc(vazio)}</option>` : ''}${o.map(([k, t]) => `<option value="${esc(k)}" ${k === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
     const dis = this.salvandoCusto ? 'disabled' : '';
-    return `<div class="form-log cform" id="lg-cform">
-      <fieldset class="grupo-f"><legend>${c ? `Cobrança ${esc(c.item)}` : 'Nova cobrança'}</legend>
+    return `<div class="cform" id="lg-cform">
+      <div class="cform-tit">${c ? `Editando a cobrança ${esc(c.item)}` : 'Nova cobrança'}</div>
+      <div class="cform-grade">
         <div class="campo"><label for="cf-tipo">Tipo</label><select id="cf-tipo" ${dis}>${ops(this.opCusto('tipoCusto'), v.tipo)}</select></div>
         <div class="campo"><label for="cf-cte">CTE / documento</label><input id="cf-cte" type="text" maxlength="20" value="${esc(v.cte)}" ${dis}></div>
         <div class="campo"><label for="cf-data">Data</label><div class="com-hoje"><input id="cf-data" type="date" value="${esc(v.data)}" ${dis}><button type="button" class="btn-txt" data-acao="cf-hoje" ${dis}>Hoje</button></div></div>
@@ -1537,7 +1728,7 @@ export class Painel {
           <button type="button" class="btn" data-acao="custo-cancelar" ${dis}>Cancelar</button>
           <button type="button" class="btn pri" data-acao="custo-salvar" ${dis}>${this.salvandoCusto ? 'Gravando…' : 'Salvar cobrança'}</button>
         </div>
-      </fieldset></div>`;
+      </div></div>`;
   }
 
   /** Redesenha so os blocos de custos e de frete (o formulario do pedido fica como esta) */
@@ -1945,6 +2136,7 @@ export class Painel {
   private fecharModal(): void {
     if (this.imp?.etapa === 'gravando') return;
     this.imp = null;
+    this.xl = null;
     this.el.camada.querySelectorAll('.modal, .fundo-modal').forEach((x) => x.remove());
   }
 
@@ -2368,6 +2560,8 @@ export class Painel {
         if (a === 'consultar') this.consultar();
         else if (a === 'diag') this.abrirDiagnostico();
         else if (a === 'importar') this.abrirImportar();
+        else if (a === 'xlsx') this.abrirXlsx();
+        else if (a === 'xlsx-gerar') this.gerarXlsxArquivo();
         else if (a?.startsWith('imp-')) void this.acaoImp(a);
         else if (a === 'sair') this.api.fechar?.();
         else if (a === 'fechar') this.fecharComConfirmacao();
@@ -2519,6 +2713,19 @@ export class Painel {
       this.atualizarForm();
     });
     this.el.camada.addEventListener('submit', (ev) => ev.preventDefault());
+    // Exportar XLSX: qualquer opcao redesenha as contagens
+    this.el.camada.addEventListener('change', (ev) => {
+      const t = ev.target as HTMLInputElement;
+      if (!this.xl || !t.closest('#lg-xlsx')) return;
+      if (t.name === 'xl-rec') this.xl.recorte = t.value;
+      else if (t.name === 'xl-filtros') this.xl.filtros = t.checked;
+      else if (t.name === 'xl-aba') {
+        if (t.checked) this.xl.abas.add(t.value);
+        else this.xl.abas.delete(t.value);
+      }
+      guardar('xlsx', { recorte: this.xl.recorte, filtros: this.xl.filtros, abas: [...this.xl.abas] });
+      this.desenharXlsx();
+    });
 
     // Tooltip dos graficos: um so, segue o ponteiro
     const tip = document.createElement('div');
