@@ -1,6 +1,6 @@
 # LOGREL - Logística (pedidos de entrega)
 
-Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em cinco etapas (previstos, faturados, enviados, entregues e retornados) e programa as saídas do dia. A edição dos dados de envio, entrega, CTE e reentrega é feita na própria tela, que também imprime o DANFE e traz os indicadores de prazo e de frete × CTE.
+Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("logrel")`). A logística acompanha os pedidos em cinco etapas (previstos, faturados, enviados, entregues e retornados) e programa as saídas do dia. A edição dos dados de envio, entrega e reentrega é feita na própria tela, que também lança os **custos de frete** de cada pedido (CTE do envio, reentregas e taxas, com a situação de cada cobrança), guarda o **histórico** de quem alterou o quê, imprime o DANFE e traz os indicadores de prazo e de frete × custo.
 
 | | |
 |---|---|
@@ -28,8 +28,16 @@ Faça tudo **fora do expediente**, nesta ordem. A homologação já está funcio
 
 Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compatlogrelupdprw).
 
+**1b. Criar as tabelas de custos de frete (ZLC) e de histórico (ZLH)**, desde 19/11/2026. Fazer primeiro na homologação.
+1. Com o `LOGRELUPD.prw` de 19/11 compilado, rode `U_LOGRELUPD` e escolha **Tabelas**. O resultado mostra, para cada tabela, o SX2, os campos, os índices e "existe no banco".
+2. Na primeira vez, as tabelas são novas: todos saem e entram de novo no Protheus.
+3. Rode `U_LOGRELUPD` → **Tabelas** de novo. Agora ele oferece a **carga inicial**: o CTE e o CTE da reentrega de cada pedido (campos da SC5) viram cobranças de Envio e Reentrega na ZLC. A prévia mostra quantos pedidos e quanto em R$. No fim, a **conferência** compara a soma da SC5 com a soma da ZLC: devem conferir.
+4. A carga pode rodar de novo: pedido que já tem cobrança na ZLC fica de fora. Os campos de CTE da SC5 não são alterados nem apagados; ficam parados.
+
+Detalhes em [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh).
+
 **2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
-1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-18a`).
+1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-19a`).
 2. Compile `LOGRELAPP/LOGRELAPP.PRW`.
 3. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
 
@@ -39,10 +47,11 @@ Inclua `U_LOGRELAPP` no menu dos usuários da logística. Não há outra configu
 **4. Conferir**
 1. Abra a tela e clique em **Diagnóstico**. Confira três coisas:
    - o REST é o da porta 10407;
-   - a versão da API é `2026-11-18a`;
+   - a versão da API é `2026-11-19a`;
    - "Campos que faltam na SC5" está vazio.
 2. Abra um pedido, grave uma data de envio de teste e apague depois. Imprima o DANFE de um pedido faturado.
-3. O `U_LOGRELUPD` pode rodar de novo, porque só cria o que falta. Se o `X31UpdTable` der erro, o dicionário já está gravado: rode de novo fora do expediente.
+3. Num pedido enviado, abra **Custos de frete**: o CTE que estava no pedido aparece como cobrança de Envio. Inclua uma cobrança de teste, marque como Divergente, exclua, e confira tudo em **Histórico de alterações**.
+4. O `U_LOGRELUPD` pode rodar de novo, porque só cria o que falta. Se o `X31UpdTable` der erro, o dicionário já está gravado: rode de novo fora do expediente.
 
 ## Para que serve
 
@@ -53,12 +62,12 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 **Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Importar planilha** e **Diagnóstico**. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
 **Abas:**
-- **Quadros:** as colunas das etapas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio). Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
+- **Quadros:** as colunas das etapas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio, custo de frete em divergência). O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
 - **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue".
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
   - prazo (no prazo × atrasado) e motivos de atraso, com percentual;
-  - comparação entre transportadoras: % no prazo, atraso médio, tempo de entrega, custo médio do CTE, % reentrega e envios;
+  - comparação entre transportadoras: % no prazo, atraso médio, tempo de entrega, custo médio, % reentrega, % com custo em divergência e envios;
   - ranking das transportadoras;
   - frete por transportadora, mensal e anual (custo, cobrado ou pedidos);
   - CTE × frete cobrado, com os 20 piores casos;
@@ -67,12 +76,16 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 **Gaveta do pedido** (clique no cartão ou na linha): dados do pedido e dos itens. No topo, cada NF do pedido com o botão **Imprimir DANFE**, que abre a rotina padrão da SPEDNFE por cima da tela (só dentro do Protheus). A carta de correção continua na SPEDNFE. Na tabela de itens, a linha de cada produto mostra os **números de série** (tabela Z01, como no RX Pedidos), quando houver. O formulário edita, nesta ordem:
 - dados do pedido para a NF-e (transportadora, volume, espécie, peso líquido e peso bruto), antes da nota. O frete destacado e o não destacado aparecem só para consulta;
 - datas: saída programada (`C5_FECENT`, desde 15/11/2026 não preenche mais a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
-- tipo de material, CTE e valor;
+- tipo de material;
 - reentrega e indicador de atraso;
 - observações da entrega (`C5_ZOBS`), texto livre;
 - retorno: data, motivo e pedido do reenvio.
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
+
+Abaixo do formulário ficam dois blocos, fechados até o clique:
+- **Custos de frete:** a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
+- **Histórico de alterações:** quem mudou o quê e quando, no pedido e nas cobranças (antes → depois), marcando o que veio da importação e da carga inicial.
 
 **Importar planilha** (atualização em massa):
 1. Cole as células do Excel, com a linha de títulos, ou escolha um CSV.
@@ -91,9 +104,10 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZDTPREV` | Previsão de entrega da transportadora | sim |
 | `C5_ZDTENTR` | Data de entrega | sim |
 | `C5_ZTPMAT` | Tipo de material (combo do SX3: T, P, C, D) | sim |
-| `C5_ZCTE` / `C5_ZVLRCTE` | CTE e valor do CTE | sim |
+| `C5_ZCTE` / `C5_ZVLRCTE` | CTE e valor do CTE | **parados** com a ZLC (19/11/2026): o CTE passa a ser cobrança de Envio |
 | `C5_ZREENTR` | Gerou reentrega (Sim/Não) | sim |
-| `C5_ZCTEREE` / `C5_ZVCTERE` / `C5_ZNDENT` | CTE, valor e nova data da reentrega | só com reentrega = Sim |
+| `C5_ZNDENT` | Nova data da reentrega | só com reentrega = Sim |
+| `C5_ZCTEREE` / `C5_ZVCTERE` | CTE e valor da reentrega | **parados** com a ZLC: viram cobrança de Reentrega |
 | `C5_ZINDICA` | Indicador de atraso (combo do SX3) | sim |
 | `C5_ZDTRET` | Data do retorno: a mercadoria voltou para a empresa e o pedido vai para Retornados | sim |
 | `C5_ZMOTRET` | Motivo do retorno (combo: 1=Recusa, 2=Endereço, 3=Avaria, 4=Outros) | só com data do retorno |
@@ -123,7 +137,7 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
   - Retornado (vem antes de todas): tem data do retorno. Sem o pedido do reenvio, aparece como "aguardando reenvio".
 - **Prazo:** é medido sempre pela previsão da transportadora.
 - **Datas:** o envio não pode ser anterior à emissão. A entrega exige envio e não pode ser anterior a ele. Reentrega só vale para pedido com data de envio (regra da tela).
-- **Frete:** o frete cobrado é `C5_FRETE` + `C5_ZFRETE`, e o custo, CTE + CTE da reentrega.
+- **Frete:** o frete cobrado é `C5_FRETE` + `C5_ZFRETE`. O custo é a soma das cobranças da ZLC (CTE, reentregas e taxas); sem a ZLC no ambiente, CTE + CTE da reentrega da SC5.
 - **Gravação:** direto na SC5, com `RecLock`. Pedido aberto por outro usuário responde "em uso".
 
 O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUDE.md).
@@ -135,6 +149,10 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 | `GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD` | Pedidos do período: padrão de 365 dias, máximo de 1100. A tela pede de 01/01 do ano anterior até hoje. |
 | `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` | Grava os campos enviados no pedido (R_E_C_N_O_ da SC5) e devolve o pedido atualizado. |
 | `POST /api/v1/vs-financial-data/logistica/pedidos/busca` | `{"pedidos": [...]}`, até 500: pedidos pelo número, sem filtro (usada pela importação). |
+| `POST /api/v1/vs-financial-data/logistica/custos` | `{"recno", "acao": "incluir"\|"alterar"\|"excluir", "item", "tipo", "cte", "data", "transportadora", "valor", "valorEsperado", "situacao", "obs"}`: grava uma cobrança de frete (ZLC) e o histórico; devolve o pedido. |
+| `GET /api/v1/vs-financial-data/logistica/historico?pedido=NNNNNN` | Histórico do pedido (ZLH), mais novo primeiro. |
+
+Sem as tabelas ZLC e ZLH no ambiente, a API funciona como antes (CTE na SC5, sem histórico) e o POST de custos responde 409.
 
 **Acesso:** as rotas não têm trava própria desde 18/11/2026 (o `U_VSAPIACE` foi retirado a pedido). O controle é o menu: só quem tem `U_LOGRELAPP` abre a tela. **Erros:** saem no header `X-Erro`, porque o REST descarta o corpo das respostas 500.
 
@@ -144,7 +162,7 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 |---|---|
 | `painel.ts` | A tela inteira: quadros, programação, lista, indicadores, gaveta (com os botões da NF) e importação. |
 | `importar.ts` | Leitura da planilha: separadores, títulos, datas, números e combos. |
-| `log.service.ts` | Chamadas GET/PUT e mensagens de erro. |
+| `log.service.ts` | Chamadas da API (pedidos, custos, histórico) e mensagens de erro. |
 | `graficos.ts` | Gráficos (copiado do PCPREL). |
 | `app.ts` | Casca: carga, Diagnóstico e chamada do DANFE (`jsToAdvpl` → `JsToAdvpl` do `LOGRELAPP.PRW`). |
 | `token.interceptor.ts` | Renova o token pelo REST do ambiente. |
@@ -177,7 +195,31 @@ Os campos `C5_Z*` foram criados à mão na homologação. O `U_LOGRELUPD` copia 
    Só cria os 17 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
 3. Todos saem e entram de novo no Protheus. Depois disso, publique a API e a tela na produção.
 
+A opção **Tabelas** do mesmo `U_LOGRELUPD` cria a ZLC e a ZLH e faz a carga inicial dos CTEs (veja o passo 1b da implantação).
+
 Pode rodar de novo: só cria o que falta. O arquivo guarda o registro inteiro do SX3, com `X3_USADO`, `X3_RESERV` e `X3_OBRIGAT` codificados, e o texto vai em Base64. Assim a definição chega igual à da homologação.
+
+## Custos de frete e histórico (ZLC e ZLH)
+
+Pedido do usuário em 19/11/2026: a transportadora às vezes manda o CTE com valor diferente do combinado, e o usuário precisa registrar o contato até o ajuste. Um pedido pode ter mais de uma reentrega e outras taxas (armazenagem, por exemplo), e a planilha não é mais importada: só a tela grava.
+
+**ZLC, custos de frete do pedido:** uma linha por cobrança, com a chave filial + pedido (6 dígitos, `C5_NUM`) + item (001, 002…, gerado pela API).
+
+| Campo | Conteúdo |
+|---|---|
+| `ZLC_TIPO` | E=Envio, R=Reentrega, A=Armazenagem, D=Devolução, O=Outra taxa |
+| `ZLC_CTE`, `ZLC_DATA`, `ZLC_TRANSP` | número do CTE ou documento, data, transportadora (começa com a do pedido) |
+| `ZLC_VALOR` | valor cobrado pela transportadora |
+| `ZLC_SITUA` | vazio = OK; D=Divergente, C=Em contato, A=Ajustado, I=Aceito como veio |
+| `ZLC_VLRESP` | valor esperado (opcional, informado à mão: não há cotação no Protheus) |
+| `ZLC_OBS` | observação (250 caracteres) |
+| `ZLC_CODUSR`, `ZLC_USUARI`, `ZLC_DTALT`, `ZLC_HRALT` | quem alterou por último e quando |
+
+A exclusão é lógica: a linha fica no banco, marcada como excluída, e o número do item não se repete.
+
+**ZLH, histórico da logística:** cada alteração feita pela tela, no pedido (campos da SC5) ou numa cobrança (ZLC). Guarda pedido, item da cobrança (vazio = pedido), data, hora, ação (inclusão, alteração, exclusão), origem (tela, importação, carga inicial), campo, título, valor antes, valor depois e o usuário. Só entra o que mudou de fato. Alteração feita fora da tela (por exemplo, no pedido de venda) não entra.
+
+**Importação por planilha:** continua. O CTE e o valor do envio e da reentrega vão para a 1ª cobrança de Envio e de Reentrega do pedido na ZLC, criada se não existir. O histórico marca essas linhas como importação.
 
 ## Publicar no Protheus
 

@@ -37,7 +37,9 @@ export class App implements AfterViewInit, OnDestroy {
       this.raiz.nativeElement,
       {
         carregar: (d, a) => this.carregar(d, a),
-        salvar: (r, d) => this.guardarErro('Salvar pedido', firstValueFrom(this.log.salvar(r, d))),
+        salvar: (r, d, o) => this.guardarErro('Salvar pedido', firstValueFrom(this.log.salvar(r, d, o))),
+        salvarCusto: (d) => this.guardarErro('Salvar cobrança de frete', firstValueFrom(this.log.salvarCusto(d))),
+        historico: (p) => this.guardarErro('Histórico do pedido', firstValueFrom(this.log.historico(p))).then((r) => r?.historico || []),
         buscarPedidos: (n) => this.guardarErro('Buscar pedidos', firstValueFrom(this.log.buscarPedidos(n))).then((r) => r?.pedidos || []),
         mensagemErro: (e) => mensagemErro(e),
         diagnostico: () => firstValueFrom(this.log.baseRest$).then((b) => this.diagnostico(b)),

@@ -2,7 +2,8 @@ import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http'
 import { Injectable, inject } from '@angular/core';
 import { catchError, map, Observable, of, shareReplay, switchMap } from 'rxjs';
 
-// API ../API/RESTLOGREL.tlpp (GET e PUT /logistica/pedidos).
+// API ../API/RESTLOGREL.tlpp (GET e PUT /logistica/pedidos; POST /logistica/custos e
+// GET /logistica/historico desde a 2026-11-19a).
 // Endereco do REST: "restLogrel" do assets/data/appconfig.json, preenchido pelo
 // empacotar.ps1 (ex.: https://xxx.protheus.cloudtotvs.com.br:10557/rest). No
 // TOTVS Cloud o FwCallApp informa a porta do broker do webapp, que nao e o REST
@@ -10,6 +11,58 @@ import { catchError, map, Observable, of, shareReplay, switchMap } from 'rxjs';
 // reescreve, mas continua mandando o token do usuario e empresa/filial.
 // Vazio (npm start): caminho relativo, atendido pelo proxy.conf.cjs.
 const CAMINHO = '/api/v1/vs-financial-data/logistica/pedidos';
+const LOGISTICA = '/api/v1/vs-financial-data/logistica';
+
+/** Cobranca de frete do pedido (tabela ZLC): CTE do envio, reentrega, armazenagem, taxas. API >= 2026-11-19a */
+export interface Custo {
+  item: string;
+  /** E envio, R reentrega, A armazenagem, D devolucao, O outra taxa (X3_CBOX do ZLC_TIPO) */
+  tipo: string;
+  cte: string;
+  data: string;
+  transportadora: string;
+  transportadoraNome: string;
+  valor: number;
+  /** '' = ok; D divergente, C em contato, A ajustado, I aceito como veio */
+  situacao: string;
+  valorEsperado: number;
+  obs: string;
+  usuario: string;
+  alteradoEm: string;
+}
+
+/** Corpo do POST /logistica/custos */
+export interface CustoEdicao {
+  recno: number;
+  acao: 'incluir' | 'alterar' | 'excluir';
+  item?: string;
+  tipo?: string;
+  cte?: string;
+  data?: string;
+  transportadora?: string;
+  valor?: number;
+  valorEsperado?: number;
+  situacao?: string;
+  obs?: string;
+}
+
+/** Linha do historico da logistica (tabela ZLH) */
+export interface HistLinha {
+  data: string;
+  hora: string;
+  /** item da cobranca (ZLC); vazio = campo do pedido (SC5) */
+  item: string;
+  /** I inclusao, A alteracao, E exclusao */
+  acao: string;
+  /** 1 tela, 2 importacao, 3 carga inicial */
+  origem: string;
+  campo: string;
+  titulo: string;
+  de: string;
+  para: string;
+  codUsuario: string;
+  usuario: string;
+}
 
 export interface ItemPedido {
   item: string;
@@ -74,6 +127,10 @@ export interface Pedido {
   pedidoReenvio?: string;
   /** C5_ZOBS: observacoes da entrega (texto livre); API >= 2026-11-15b */
   obsEntrega?: string;
+  /** Cobrancas de frete (ZLC); so com a tabela criada (API >= 2026-11-19a) */
+  custos?: Custo[];
+  /** Gravou, mas o historico (ZLH) falhou */
+  avisoHistorico?: string;
   itens: ItemPedido[];
   notas: string[];
   dataFaturamento: string;
@@ -88,7 +145,11 @@ export interface LogResposta {
   ate: string;
   /** Campos da SC5 que ainda nao existem no ambiente (vem vazios e nao editam) */
   camposFaltando: string[];
-  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[] };
+  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[]; tipoCusto?: Opcao[]; situacaoCusto?: Opcao[] };
+  /** Tabela de custos de frete (ZLC) existe: o CTE sai da SC5 e vira lista de cobrancas */
+  temCustos?: boolean;
+  /** Tabela de historico (ZLH) existe */
+  temHistorico?: boolean;
   tamanhos: Record<string, number>;
   transportadoras: Opcao[];
   total: number;
@@ -149,8 +210,20 @@ export class LogService {
     return this.baseRest$.pipe(switchMap((b) => this.http.post<{ versao: string; pedidos: Pedido[]; naoEncontrados: string[] }>(`${b}${CAMINHO}/busca`, { pedidos })));
   }
 
-  salvar(recno: number, dados: PedidoEdicao): Observable<Pedido> {
-    return this.baseRest$.pipe(switchMap((b) => this.http.put<Pedido>(`${b}${CAMINHO}/${recno}`, dados)));
+  /** origem 'importacao' marca o historico (ZLH) como importacao */
+  salvar(recno: number, dados: PedidoEdicao, origem?: string): Observable<Pedido> {
+    const corpo = origem ? { ...dados, origem } : dados;
+    return this.baseRest$.pipe(switchMap((b) => this.http.put<Pedido>(`${b}${CAMINHO}/${recno}`, corpo)));
+  }
+
+  /** Inclui, altera ou exclui uma cobranca de frete; responde o pedido como o GET */
+  salvarCusto(dados: CustoEdicao): Observable<Pedido> {
+    return this.baseRest$.pipe(switchMap((b) => this.http.post<Pedido>(`${b}${LOGISTICA}/custos`, dados)));
+  }
+
+  historico(pedido: string): Observable<{ temHistorico: boolean; historico: HistLinha[] }> {
+    const params = new HttpParams().set('pedido', pedido);
+    return this.baseRest$.pipe(switchMap((b) => this.http.get<{ temHistorico: boolean; historico: HistLinha[] }>(`${b}${LOGISTICA}/historico`, { params })));
   }
 }
 

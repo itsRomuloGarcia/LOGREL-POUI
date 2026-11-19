@@ -4,7 +4,8 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`), versão `LG_VERSAO` = `2026-11-18a` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`), versão `LG_VERSAO` = `2026-11-19a` | sim |
+| Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
 | Acesso | só o menu (`U_LOGRELAPP`). O `U_VSAPIACE` saiu da API em 18/11/2026 (`2026-11-18a`) | não |
@@ -56,6 +57,8 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 ## Rotas
 - `GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD` (padrão 365 dias, máximo 1100). A tela pede 01/01 do ano anterior até hoje.
 - `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` (R_E_C_N_O_ da SC5). Só os campos enviados; responde o pedido no formato do GET, sempre (busca pelo número, sem filtro).
+- `POST /api/v1/vs-financial-data/logistica/custos` (`2026-11-19a`): incluir/alterar/excluir uma cobrança da ZLC; responde o pedido como o GET (+ `itemCusto`, `avisoHistorico` se o histórico falhar). 409 `SEM_TABELA_CUSTOS` sem a ZLC.
+- `GET /api/v1/vs-financial-data/logistica/historico?pedido=NNNNNN` (`2026-11-19a`): linhas da ZLH, mais novas primeiro.
 - `POST /api/v1/vs-financial-data/logistica/pedidos/busca` `{"pedidos": [...]}` (até 500): pedidos pelo número, **sem filtro** de período, TES, tipo ou resíduo; responde `{versao, pedidos, naoEncontrados}`. A importação usa para os pedidos da planilha que não vieram no GET (lotes de 400). Criada em 13/11/2026 (`2026-11-13c`), depois que o usuário recebeu "Pedido fora da consulta" e pediu que a importação "aceite todos".
 - **Sem trava de acesso na API** desde `2026-11-18a`. Pedido do usuário em 18/11/2026: "tire isso desse fonte VSACESSO ... as próximas APIs, não coloque, pergunte antes". Até a `2026-11-16a` as três rotas chamavam `U_VSAPIACE(.T., "U_LOGRELAPP")` (`MV_VSAPUSR` ou rotina no menu). **Não recolocar.** Em API nova, perguntar antes de pôr qualquer trava.
 
@@ -181,7 +184,18 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - A importação da tela recusou 000034 (envio 26/01 < emissão 27/01) e 002129 (envio 18/05 < emissão 22/05): é erro na planilha.
   - 22 linhas trazem indicador sem par na lista reserva da tela: Material retido (13), Cliente trocou endereço (3), Loja em obra (3), Divergência de cubagem (1), Problema no CNPJ do cliente (1) e Recusa (1). Esses só gravam se existirem no X3_CBOX do `C5_ZINDICA`; senão, a prévia avisa e o resto da linha grava.
 
+- **19/11/2026, pedido do usuário: custos de frete (ZLC) e histórico (ZLH)** (API `2026-11-19a`, `LOGRELUPD.prw` com a opção Tabelas, tela).
+  - **Por quê:** a transportadora às vezes manda o CTE com valor diferente do combinado e o usuário precisa registrar o contato até o ajuste. O pedido pode ter mais de uma reentrega e outras taxas (armazenagem). O usuário escolheu **tabela própria** em vez de campos novos na SC5 ("a quantidade de campos na aba expedição pode confundir") e quis o histórico completo na **mesma API** (sem API nova). Não existe cotação com o valor real: só `C5_FRETE`/`C5_ZFRETE` (cobrado do cliente), então a divergência é marcada à mão.
+  - **Decisões do usuário:** tipos E/R/A/D/O e situações D/C/A/I como propostos ("se faltar algo depois, eu ajusto"); exclusão por qualquer usuário porque fica no histórico; importação continua (pode precisar na homologação); a planilha não será mais importada na produção.
+  - **ZLC** (custos): `ZLC_FILIAL+ZLC_PEDIDO+ZLC_ITEM` (índice 1) e `+ZLC_SITUA` (índice 2). `ZLC_ITEM` = `MAX` + 1 contando os excluídos (`ProxItem`). `ZLC_OBS` é **C 250** (não memo, para não depender de memo real no TOTVS Cloud). `ZLC_CTE` = tamanho do `C5_ZCTE` com mínimo 20. Exclusão lógica com carimbo de quem excluiu.
+  - **ZLH** (histórico): uma linha por campo alterado (`HistTxt` em texto; combo vira "D - Divergente", data dd/mm/aaaa, valor 1.234,56). Ação I/A/E; origem 1 tela, 2 importação (`"origem":"importacao"` no PUT, a tela manda na importação), 3 carga inicial. Grava a SC5 do PUT e a ZLC do POST de custos. Erro no histórico não desfaz a gravação: vai em `avisoHistorico` e a tela mostra.
+  - **API:** `TemTab` confere SX2 + colunas no `ALL_TAB_COLUMNS` com `LG_OWNER`. GET manda `custos` por pedido (lotes de 900), `temCustos`, `temHistorico`, `opcoes.tipoCusto`/`situacaoCusto` (X3_CBOX). Com a ZLC, as chaves `cte`/`valorCte`/`cteReentrega`/`valorCteReentrega` do PUT (importação) gravam na 1ª cobrança E/R da ZLC (`CustoDoPedido`), não na SC5. Rotas só nos formatos que já funcionam no TOTVS Cloud (GET com query, POST simples, sem DELETE nem dois parâmetros de caminho). Usuário por `RetCodUsr()`/`UsrRetName()`, como o RESTPCPREL.
+  - **Compatibilizador:** `U_LOGRELUPD` → **Tabelas** (`CriaTab`, mesmo caminho do `VSHISTUPD` do RX Pedidos, que já rodou na homologação: SX2/SIX copiados da SC2, campos copiados de C2_FILIAL/C2_OBS/C6_QTDLIB/C2_DATRF). Tabela nova pede sair e entrar e rodar de novo; aí oferece a **carga inicial** (`Carga`/`GravaCarga`): CTE e CTE da reentrega da SC5 → cobranças E e R, com linha de histórico origem 3, pulando pedido que já tem ZLC (mesmo excluída); no fim a **conferência** soma SC5 × ZLC.
+  - **Tela:** a gaveta perdeu o grupo "CTE da transportadora" e os campos de CTE da reentrega; ganhou os blocos **Custos de frete** (lista, total, formulário que grava sem fechar a gaveta, sugere Envio → Reentrega → Outra taxa) e **Histórico de alterações** (lido ao abrir). Quadros: KPI e marca no cartão "custo em divergência" e opção no filtro Situação. Lista: CTEs, Custo de frete, Cobranças, Custo em divergência. Indicadores: custo = todas as cobranças, KPI de divergência, comparação "% custo em divergência". Aviso "Falta lançar o CTE do envio em Custos de frete". Sem a ZLC (`temCustos` falso), tudo como antes.
+  - Testado com API falsa (dados fictícios) e Chrome headless: incluir, editar, editar sem mudança, validação, excluir, histórico (pedido, cobranças, carga inicial), PUT do pedido no histórico, aviso de CTE, filtro, Lista, Indicadores, celular sem rolagem lateral, sem erro de JavaScript. Pacotes de homologação e produção gerados em 19/11. **Não testado no Protheus; fontes não compilados.**
+
 ## Pendências
+- **19/11/2026, custos de frete e histórico:** na homologação, compilar `LOGRELUPD.prw`, rodar **Tabelas** (sair/entrar, rodar de novo para a carga e ver a conferência), compilar `RESTLOGREL.tlpp` `2026-11-19a` e o `logrel.app` de 19/11. Conferir: CTE antigo virou cobrança de Envio; incluir/editar/excluir cobrança; histórico com o nome do usuário (não testado se `UsrRetName` funciona na thread do REST com o token da tela; no RESTPCPREL funciona); combo da situação no histórico. Na produção, depois dos campos `C5_Z*`, mesma ordem.
 - **18/11/2026:** compilar o `RESTLOGREL.tlpp` `2026-11-18a` na produção (e na homologação) e conferir no Diagnóstico a versão e os campos que faltam.
 - **16/11/2026:** compilar `RESTLOGREL.tlpp` `2026-11-16a` (séries), `LOGRELAPP.PRW` (só DANFE) e `logrel.app` (16/11 09:50). Conferir o DANFE de novo e as séries de um pedido com Z01 contra o RX Pedidos.
 - **18/11/2026, compatibilizador dos campos `C5_Z*`: `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`), não compilado nem testado.** Atende o pedido de 16/11.
@@ -221,4 +235,4 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - Conferir no Diagnóstico se aparece "Campos que faltam na SC5" e se o combo do C5_ZTPMAT chega com D=Pedestal.
 - Confirmar com o usuário: base só `C5_TIPO = 'N'`; bloqueio dos dados comerciais depois da NF; regra de atraso com reentrega (conta a nova data); período pela emissão.
 - O CSV não foi testado dentro do Protheus (download no navegador embutido), nem o "Escolher arquivo" da importação; colar do Excel não depende disso.
-- Ideias não feitas: registrar envio em lote (vários pedidos, mesma data/CTE), log de quem alterou, atualização automática.
+- Ideias não feitas: registrar envio em lote (vários pedidos, mesma data/CTE), atualização automática. (O log de quem alterou virou o histórico ZLH em 19/11/2026.)

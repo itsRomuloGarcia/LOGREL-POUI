@@ -1,6 +1,6 @@
 import * as G from './graficos';
 import { autoMapa, baixar, celulaCsv, dataIso, Destino, DESTINOS, DESTINOS_IMP, lerArquivo, lerTabela, numBR, numPedido, opcaoDe, semValor, simNao } from './importar';
-import { ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.service';
+import { Custo, CustoEdicao, HistLinha, ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.service';
 
 // Tela Logistica (pedidos de entrega): Quadros (previstos, faturados, enviados,
 // entregues), Lista completa (um item por linha, com exportacao) e Indicadores.
@@ -13,7 +13,12 @@ export type AcaoNf = 'danfe';
 
 export interface Api {
   carregar(de: string, ate: string): void;
-  salvar(recno: number, d: PedidoEdicao): Promise<Pedido>;
+  /** origem 'importacao' marca o historico como importacao */
+  salvar(recno: number, d: PedidoEdicao, origem?: string): Promise<Pedido>;
+  /** Cobranca de frete (ZLC): incluir, alterar, excluir. API >= 2026-11-19a */
+  salvarCusto(d: CustoEdicao): Promise<Pedido>;
+  /** Historico da logistica do pedido (ZLH) */
+  historico(pedido: string): Promise<HistLinha[]>;
   /** Pedidos pelo numero, sem filtro (importacao de pedido que nao veio na consulta) */
   buscarPedidos(pedidos: string[]): Promise<Pedido[]>;
   mensagemErro(e: unknown): string;
@@ -62,6 +67,23 @@ const INDICA_PADRAO: Opcao[] = [
 ];
 /** C5_ZMOTRET informado pelo usuario em 13/11/2026 */
 const MOTRET_PADRAO: Opcao[] = [['1', 'Recusa'], ['2', 'Endereço'], ['3', 'Avaria'], ['4', 'Outros']];
+/** Custos de frete (ZLC_TIPO / ZLC_SITUA), usados so se o SX3 nao mandar o combo */
+const TIPOCUSTO_PADRAO: Opcao[] = [['E', 'Envio'], ['R', 'Reentrega'], ['A', 'Armazenagem'], ['D', 'Devolução'], ['O', 'Outra taxa']];
+const SITCUSTO_PADRAO: Opcao[] = [['D', 'Divergente'], ['C', 'Em contato'], ['A', 'Ajustado'], ['I', 'Aceito como veio']];
+/** Situacao da cobranca que ainda pede contato com a transportadora */
+const EM_ABERTO = ['D', 'C'];
+const COR_SITCUSTO: Record<string, string> = { '': 'noprazo', D: 'atrasado', C: 'reent', A: 'mat', I: 'semprev' };
+/** Campos da ZLC no historico */
+const ROTULO_CUSTO: Record<string, string> = {
+  ZLC_TIPO: 'Tipo',
+  ZLC_CTE: 'CTE / documento',
+  ZLC_DATA: 'Data',
+  ZLC_TRANSP: 'Transportadora',
+  ZLC_VALOR: 'Valor cobrado',
+  ZLC_SITUA: 'Situação',
+  ZLC_VLRESP: 'Valor esperado',
+  ZLC_OBS: 'Observação',
+};
 const TIPOPED_PADRAO: Opcao[] = [['AST', 'Assis. técnica'], ['COM', 'Comodato'], ['LOC', 'Locação'], ['REM', 'Remessa'], ['TRC', 'Troca'], ['VAV', 'Venda avulsa'], ['VEN', 'Venda']];
 
 /** Chave do corpo do PUT -> campo da SC5 (para desligar o que ainda nao existe) */
@@ -133,7 +155,7 @@ const ORD_QUADRO: Record<Etapa, [string, string, (r: Reg) => string, boolean][]>
 };
 
 /** Pedidos enviados agregados por transportadora (ranking e comparacao) */
-interface LnTransp { nome: string; env: number; ent: number; noPrazo: number; atr: number; comPrev: number; atrDias: number; lead: number; nLead: number; custo: number; nCte: number; cobrado: number; reent: number; qtd: number }
+interface LnTransp { div: number; nome: string; env: number; ent: number; noPrazo: number; atr: number; comPrev: number; atrDias: number; lead: number; nLead: number; custo: number; nCte: number; cobrado: number; reent: number; qtd: number }
 const umaCasa = (v: number) => (Math.round(v * 10) / 10).toLocaleString('pt-BR');
 const pctV = (v: number) => `${Math.round(v * 100)}%`;
 const rsV = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -144,6 +166,7 @@ const COMPARA: [string, string, (g: LnTransp) => number | null, (v: number) => s
   ['lead', 'Tempo de entrega', (g) => (g.nLead ? g.lead / g.nLead : null), (v) => `${umaCasa(v)} d`, (g) => `${g.nLead} entrega${g.nLead > 1 ? 's' : ''}`, G.CAT[0], undefined],
   ['cmed', 'Custo médio do CTE', (g) => (g.nCte ? g.custo / g.nCte : null), rsV, (g) => `${g.nCte} com CTE`, G.CAT[1], undefined],
   ['reent', '% reentrega', (g) => (g.env ? g.reent / g.env : null), pctV, (g) => `${g.reent} de ${g.env}`, G.CAT[3], undefined],
+  ['div', '% custo em divergência', (g) => (g.env ? g.div / g.env : null), pctV, (g) => `${g.div} de ${g.env}`, COR_ATR, undefined],
   ['env', 'Envios', (g) => g.env, (v) => v.toLocaleString('pt-BR'), (g) => `${g.qtd.toLocaleString('pt-BR')} un`, G.CAT[0], undefined],
 ];
 
@@ -186,7 +209,14 @@ interface Reg {
   /** Entregue: dias entre a previsao e a entrega (+ = atraso). Enviado: dias de atraso ate hoje */
   atraso: number | null;
   cobrado: number;
+  /** Com a ZLC: soma das cobrancas (CTE, reentregas e taxas); sem ela: CTE + CTE da reentrega da SC5 */
   custo: number;
+  /** Cobrancas divergentes ou em contato (ZLC) */
+  nDiv: number;
+  /** Soma de (valor - esperado) das cobrancas em aberto que tem o esperado */
+  difDiv: number;
+  /** Numeros dos CTEs (ZLC ou SC5) */
+  ctes: string[];
   qtd: number;
   valor: number;
   parcial: boolean;
@@ -241,6 +271,8 @@ const SITUACOES: [string, string][] = [
   ['vence', 'Vencem em até 2 dias'],
   ['semprev', 'Sem previsão'],
 ];
+/** Filtro extra da situacao, so com a tabela de custos */
+const SIT_CUSTO: [string, string] = ['custodiv', 'Custo de frete em divergência'];
 /** Filtro de data da tela (sobre o que ja foi consultado) */
 type CampoData = 'emissao' | 'entrega' | 'previsao';
 
@@ -294,6 +326,12 @@ export class Painel {
   private imp: Imp | null = null;
   /** gaveta aberta: recno do pedido */
   private aberto = 0;
+  /** gaveta: cobranca em edicao ('' = nova, null = nenhuma), bloco de custos aberto e gravando */
+  private custoEdit: string | null = null;
+  private custosAbertos = false;
+  private salvandoCusto = false;
+  /** historico do pedido aberto (lido ao abrir o bloco) */
+  private hist: { pedido: string; linhas: HistLinha[] | null; erro: string } | null = null;
   private tAviso = 0;
   private tBusca = 0;
   private readonly e: Estado;
@@ -382,6 +420,8 @@ export class Painel {
     if (!r.versao || r.versao < '2026-11-15a') PARA_NFE.forEach((k) => this.faltando.add(CAMPO[k]));
     // API anterior a 2026-11-15b: sem C5_ZOBS e a saida programada ainda copia para o envio
     if (!r.versao || r.versao < '2026-11-15b') this.faltando.add(CAMPO.obsEntrega);
+    // Com a tabela de custos, o CTE da SC5 nao e mais usado: nao avisa se faltar
+    if (r.temCustos) ['C5_ZCTE', 'C5_ZVLRCTE', 'C5_ZCTEREE', 'C5_ZVCTERE'].forEach((c) => this.faltando.delete(c));
     this.regs = (r.pedidos || []).map((p) => this.montar(p));
     this.carregando = false;
     this.erroCarga = '';
@@ -432,6 +472,9 @@ export class Painel {
       }
     }
     const produtos = [...new Set(itens.map((i) => i.descricao))].join(' · ');
+    const cus = this.temCustos ? p.custos || [] : null;
+    const abertos = cus ? cus.filter((c) => EM_ABERTO.includes(c.situacao)) : [];
+    const ctes = cus ? cus.map((c) => c.cte).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean);
     return {
       p,
       et,
@@ -439,13 +482,16 @@ export class Painel {
       prazo,
       atraso,
       cobrado: (p.frete || 0) + (p.freteNaoDestacado || 0),
-      custo: (p.valorCte || 0) + (p.valorCteReentrega || 0),
+      custo: cus ? cus.reduce((s, c) => s + (c.valor || 0), 0) : (p.valorCte || 0) + (p.valorCteReentrega || 0),
+      nDiv: abertos.length,
+      difDiv: abertos.filter((c) => c.valorEsperado > 0).reduce((s, c) => s + (c.valor - c.valorEsperado), 0),
+      ctes,
       qtd: itens.reduce((s, i) => s + (i.quantidade || 0), 0),
       valor: itens.reduce((s, i) => s + (i.valor || 0), 0),
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, p.cte, p.cteReentrega, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
       ),
     };
   }
@@ -465,6 +511,22 @@ export class Painel {
     const o = this.op(k).find((x) => x[0] === cod);
     return o ? o[1] : cod;
   }
+  private get temCustos(): boolean {
+    return !!this.resp?.temCustos;
+  }
+  private opCusto(k: 'tipoCusto' | 'situacaoCusto'): Opcao[] {
+    const v = this.resp?.opcoes?.[k] || [];
+    return v.length ? v : k === 'tipoCusto' ? TIPOCUSTO_PADRAO : SITCUSTO_PADRAO;
+  }
+  private txtCusto(k: 'tipoCusto' | 'situacaoCusto', cod: string): string {
+    if (!cod) return k === 'situacaoCusto' ? 'OK' : '';
+    const o = this.opCusto(k).find((x) => x[0] === cod);
+    return o ? o[1] : cod;
+  }
+  /** CTE para os cartoes: o 1o da lista */
+  private cteTxt(r: Reg): string {
+    return r.ctes.length ? ` · CTE ${esc(r.ctes[0])}${r.ctes.length > 1 ? ` +${r.ctes.length - 1}` : ''}` : '';
+  }
   private transpNome(r: Reg): string {
     return r.p.transportadoraNome || (r.p.transportadora ? `Cód. ${r.p.transportadora}` : 'Sem transportadora');
   }
@@ -482,7 +544,7 @@ export class Painel {
       uf: lista(conta((r) => r.p.uf || '-'), (k) => (k === '-' ? '(sem UF)' : k)),
       tpmat: lista(conta((r) => r.p.tipoMaterial || '-'), (k) => (k === '-' ? 'Não informado' : this.txtOp('tipoMaterial', k))),
       tipo: lista(conta((r) => r.p.tipoPedido || '-'), (k) => (k === '-' ? 'Não informado' : this.txtOp('tipoPedido', k))),
-      situacao: SITUACOES,
+      situacao: this.temCustos ? [...SITUACOES, SIT_CUSTO] : SITUACOES,
     };
     MULTI.forEach(([k]) => {
       // tira da selecao o que nao existe mais nos dados
@@ -538,7 +600,7 @@ export class Painel {
     return this.regs.filter((r) => {
       if (q && !r.busca.includes(q)) return false;
       if (!em(transp, r.p.transportadora || '-') || !em(uf, r.p.uf || '-') || !em(tpmat, r.p.tipoMaterial || '-') || !em(tipo, r.p.tipoPedido || '-')) return false;
-      if (situacao.length && !situacao.includes(r.prazo)) return false;
+      if (situacao.length && !situacao.includes(r.prazo) && !(situacao.includes('custodiv') && r.nDiv > 0)) return false;
       if (fDe || fAte) {
         const d = this.dataFiltro(r);
         if (!d || (fDe && d < fDe) || (fAte && d > fAte)) return false;
@@ -628,6 +690,12 @@ export class Painel {
           const ag = regs.filter((r) => r.et === 'ret' && !r.p.pedidoReenvio).length;
           return kpi('Aguardando reenvio', n0(ag), 'voltaram e ainda sem o pedido do reenvio', ag > 0);
         })()}
+        ${(() => {
+          if (!this.temCustos) return '';
+          const div = regs.filter((r) => r.nDiv > 0);
+          const dif = div.reduce((s, r) => s + r.difDiv, 0);
+          return kpi('Custo de frete em divergência', n0(div.length), div.length ? `pedidos em contato com a transportadora${dif ? ` · ${rs0(dif)} acima do esperado` : ''}` : 'nenhuma cobrança divergente', div.length > 0);
+        })()}
       </div>
       <div class="quadros">${cols}</div>`;
   }
@@ -652,7 +720,7 @@ export class Painel {
       <span class="l1"><b class="mono">${esc(p.pedido)}</b>${pills.join('')}</span>
       <span class="cli" title="${esc(p.nome)}">${esc(p.fantasia || p.nome || '(sem nome)')}</span>
       <span class="m">${esc([p.cidade, p.uf].filter(Boolean).join('/') || 'sem cidade')} · ${esc(this.transpNome(r))}</span>
-      <span class="m">${n0(r.qtd)} un · ${rs0(r.valor)}${p.cte ? ` · CTE ${esc(p.cte)}` : ''}</span>
+      <span class="m">${n0(r.qtd)} un · ${rs0(r.valor)}${this.cteTxt(r)}${r.nDiv ? ' · <b class="crit-txt">custo em divergência</b>' : ''}</span>
       <span class="m">${datas}</span>
     </button>`;
   }
@@ -769,7 +837,7 @@ export class Painel {
     if (onde === 'ent') {
       if (r.et === 'ent') linha = `<span class="kb-st ok">✓ Entregue ${fmtCurto(r.entFinal)}</span>`;
       else {
-        linha = `<span class="m">Enviado ${fmtCurto(p.dataEnvio)}${p.cte ? ` · CTE ${esc(p.cte)}` : ''}</span>`;
+        linha = `<span class="m">Enviado ${fmtCurto(p.dataEnvio)}${this.cteTxt(r)}</span>`;
         botao = `<button type="button" class="btn pri kb-btn" data-kb="entregue" data-rec="${p.recno}" ${ocupado || soLeitura ? 'disabled' : ''}>${ocupado ? 'Gravando…' : 'Entregue'}</button>`;
       }
     } else if (saiu) {
@@ -923,11 +991,21 @@ export class Painel {
       { k: 'denv', t: 'Envio', v: (r) => r.p.dataEnvio, f: d },
       { k: 'dprev', t: 'Previsão entrega', v: (r) => r.p.dataPrevisao, f: d },
       { k: 'dent', t: 'Entrega', v: (r) => r.p.dataEntrega, f: d },
-      { k: 'cte', t: 'CTE', v: (r) => r.p.cte },
-      { k: 'vcte', t: 'Valor CTE', v: (r) => r.p.valorCte, f: m, dir: true },
-      { k: 'reent', t: 'Reentrega', v: (r) => r.p.reentrega },
-      { k: 'ctere', t: 'CTE reentrega', v: (r) => r.p.cteReentrega },
-      { k: 'vctere', t: 'Valor CTE reentrega', v: (r) => r.p.valorCteReentrega, f: m, dir: true },
+      ...(this.temCustos
+        ? [
+            { k: 'cte', t: 'CTEs', v: (r: Reg) => r.ctes.join(' / '), tit: 'Todos os CTEs/documentos das cobranças de frete do pedido' },
+            { k: 'vcte', t: 'Custo de frete', v: (r: Reg) => r.custo, f: m, dir: true, tit: 'Soma das cobranças (CTE, reentregas e taxas)' },
+            { k: 'ncus', t: 'Cobranças', v: (r: Reg) => (r.p.custos || []).length || '', dir: true },
+            { k: 'scus', t: 'Custo em divergência', v: (r: Reg) => (r.nDiv ? `${r.nDiv} em aberto` : '') },
+            { k: 'reent', t: 'Reentrega', v: (r: Reg) => r.p.reentrega },
+          ]
+        : [
+            { k: 'cte', t: 'CTE', v: (r: Reg) => r.p.cte },
+            { k: 'vcte', t: 'Valor CTE', v: (r: Reg) => r.p.valorCte, f: m, dir: true },
+            { k: 'reent', t: 'Reentrega', v: (r: Reg) => r.p.reentrega },
+            { k: 'ctere', t: 'CTE reentrega', v: (r: Reg) => r.p.cteReentrega },
+            { k: 'vctere', t: 'Valor CTE reentrega', v: (r: Reg) => r.p.valorCteReentrega, f: m, dir: true },
+          ]),
       { k: 'dnova', t: 'Nova entrega', v: (r) => r.p.dataNovaEntrega, f: d },
       { k: 'ind', t: 'Indicador de atraso', v: (r) => this.txtOp('indicador', r.p.indicador) },
       { k: 'dret', t: 'Retorno', v: (r) => r.p.dataRetorno || '', f: d },
@@ -1034,7 +1112,8 @@ export class Painel {
       ${kpi('Em trânsito atrasados', n0(atrTrans.length), 'passaram da previsão', atrTrans.length ? 'crit' : '')}
       ${kpi('Tempo médio de entrega', lead.length ? `${n0(Math.round(media(lead) * 10) / 10)} d` : '–', 'do envio à entrega')}
       ${kpi('Reentregas', n0(reent), pct(reent, enviados.length) + ' dos enviados')}
-      ${kpi('Custo de CTE', rs0(custo), `${n0(comCte.length)} pedidos com CTE lançado`)}
+      ${kpi(this.temCustos ? 'Custo de frete' : 'Custo de CTE', rs0(custo), `${n0(comCte.length)} pedidos com ${this.temCustos ? 'custo' : 'CTE'} lançado`)}
+      ${this.temCustos ? kpi('Custo em divergência', n0(enviados.filter((r) => r.nDiv > 0).length), 'pedidos com cobrança divergente ou em contato', enviados.some((r) => r.nDiv > 0) ? 'crit' : '') : ''}
       ${kpi('Frete cobrado', rs0(cobrado), 'destacado + não destacado')}
     </div>`;
 
@@ -1122,7 +1201,7 @@ export class Painel {
         ${cartao('Motivos dos atrasos', `${n0(atrasados.length)} pedidos atrasados (entregues e em trânsito), pelo indicador de atraso`, gMotivos)}
         ${cartao('Comparação entre transportadoras', 'Escolha o que comparar. Pedidos enviados no recorte; % no prazo e atraso pela previsão da transportadora.', this.comparaTransp(enviados), 'largo')}
         ${cartao('Ranking de transportadoras', 'Pedidos enviados no recorte. Clique no título da coluna para ordenar.', this.rankingTransp(enviados), 'largo')}
-        ${cartao('Frete acumulado por transportadora', 'Pelo mês do envio. Custo = CTE + CTE de reentrega; cobrado = frete destacado + não destacado.', this.acumulado(enviados), 'largo')}
+        ${cartao('Frete acumulado por transportadora', `Pelo mês do envio. Custo = ${this.temCustos ? 'todas as cobranças de frete (CTE, reentregas e taxas)' : 'CTE + CTE de reentrega'}; cobrado = frete destacado + não destacado.`, this.acumulado(enviados), 'largo')}
         ${cartao('Custo do CTE × frete cobrado no pedido', `Por mês do envio, só os ${n0(comCte.length)} pedidos com CTE lançado. Cobrado ${rs0(comCte.reduce((s, r) => s + r.cobrado, 0))} × CTE ${rs0(comCte.reduce((s, r) => s + r.custo, 0))}.`, gCusto, 'largo')}
         ${cartao('Pedidos com CTE acima do cobrado', 'Os 20 com maior diferença. Clique para abrir o pedido.', tabPiores, 'largo')}
         ${cartao('Modelos mais enviados', 'Unidades dos 15 produtos com mais envios (C6_DESCRI)', gModelos)}
@@ -1152,13 +1231,14 @@ export class Painel {
     const m = new Map<string, LnTransp>();
     enviados.forEach((r) => {
       const k = r.p.transportadora || '-';
-      const g = m.get(k) || { nome: this.transpNome(r), env: 0, ent: 0, noPrazo: 0, atr: 0, comPrev: 0, atrDias: 0, lead: 0, nLead: 0, custo: 0, nCte: 0, cobrado: 0, reent: 0, qtd: 0 };
+      const g = m.get(k) || { div: 0, nome: this.transpNome(r), env: 0, ent: 0, noPrazo: 0, atr: 0, comPrev: 0, atrDias: 0, lead: 0, nLead: 0, custo: 0, nCte: 0, cobrado: 0, reent: 0, qtd: 0 };
       g.env++;
       g.qtd += r.qtd;
       g.custo += r.custo;
       if (r.custo > 0) g.nCte++;
       g.cobrado += r.cobrado;
       if (r.p.reentrega === 'SIM') g.reent++;
+      if (r.nDiv > 0) g.div++;
       if (r.et === 'ent') {
         g.ent++;
         if (r.prazo === 'noprazo') g.noPrazo++;
@@ -1288,7 +1368,13 @@ export class Painel {
     const tempo = passos
       .map(([t, d]) => `<li class="${d ? '' : 'vazio'}"><b>${esc(t)}</b><br><span class="${d ? '' : 'muted'}">${d ? fmt(d) : 'não informado'}</span></li>`)
       .join('');
-    const dif = r.cobrado - r.custo;
+    const comCustos = this.temCustos;
+    // gaveta nova: sem cobranca em edicao; o historico e lido quando o bloco abre
+    if (!this.hist || this.hist.pedido !== p.pedido) {
+      this.custoEdit = null;
+      this.custosAbertos = false;
+      this.hist = null;
+    }
 
     this.el.camada.innerHTML = `<div class="fundo" data-acao="fechar"></div>
       <aside class="gaveta" role="dialog" aria-modal="true" aria-label="Pedido ${esc(p.pedido)}">
@@ -1321,16 +1407,16 @@ export class Painel {
               ${combo('indicador', 'Indicador de atraso', this.op('indicador'), p.indicador)}
               <div class="campo inteiro"><label for="f-obsEntrega">Observações da entrega</label><textarea id="f-obsEntrega" data-f="obsEntrega" rows="3" ${tam[CAMPO.obsEntrega] ? `maxlength="${tam[CAMPO.obsEntrega]}"` : ''} placeholder="Texto livre: horário de recebimento, contato, acesso…" ${dis('obsEntrega')} ${tit('obsEntrega')}>${esc(p.obsEntrega || '')}</textarea></div>
             </fieldset>
-            <fieldset class="grupo-f"><legend>CTE da transportadora</legend>
+            ${comCustos ? '' : `<fieldset class="grupo-f"><legend>CTE da transportadora</legend>
               ${texto('cte', 'Número do CTE', p.cte)}
               ${num('valorCte', 'Valor do CTE (R$)', p.valorCte)}
-            </fieldset>
+            </fieldset>`}
             <fieldset class="grupo-f"><legend>Reentrega</legend>
               <div class="campo"><label>Gerou reentrega?</label><div class="radios">
                 <label><input type="radio" name="reentrega" data-f="reentrega" value="N" ${!reent ? 'checked' : ''} ${dis('reentrega')}> Não</label>
                 <label><input type="radio" name="reentrega" data-f="reentrega" value="S" ${reent ? 'checked' : ''} ${dis('reentrega')}> Sim</label></div></div>
-              ${texto('cteReentrega', 'CTE da reentrega', p.cteReentrega, !reent)}
-              ${num('valorCteReentrega', 'Valor do CTE da reentrega (R$)', p.valorCteReentrega, !reent)}
+              ${comCustos ? '' : texto('cteReentrega', 'CTE da reentrega', p.cteReentrega, !reent)}
+              ${comCustos ? '' : num('valorCteReentrega', 'Valor do CTE da reentrega (R$)', p.valorCteReentrega, !reent)}
               ${data('dataNovaEntrega', 'Nova data de entrega', p.dataNovaEntrega, !reent)}
             </fieldset>
             <fieldset class="grupo-f"><legend>Retorno à empresa</legend>
@@ -1341,13 +1427,9 @@ export class Painel {
             </fieldset>
             <ul class="avisos-f" id="lg-avisos" aria-live="polite"></ul>
           </form>
+          ${comCustos ? `<div id="lg-custos">${this.custosHtml(r)}</div>` : ''}
 
-          <section><h3>Frete</h3>
-            <dl class="grade-info">
-              <div><dt>Cobrado no pedido</dt><dd>${rs(r.cobrado)} <span class="muted">(destacado ${rs(p.frete)} + não destacado ${rs(p.freteNaoDestacado)})</span></dd></div>
-              <div><dt>Custo de CTE</dt><dd>${rs(r.custo)}${p.valorCteReentrega ? ` <span class="muted">(reentrega ${rs(p.valorCteReentrega)})</span>` : ''}</dd></div>
-              <div><dt>Cobrado − CTE</dt><dd class="${r.custo && dif < 0 ? 'crit-txt' : ''}">${r.custo ? rs(dif) : '<span class="muted">sem CTE lançado</span>'}</dd></div>
-            </dl></section>
+          <section id="lg-frete">${this.freteHtml(r)}</section>
 
           <section><h3>Cliente e pedido</h3>
             <dl class="grade-info">
@@ -1365,6 +1447,7 @@ export class Painel {
             <div class="tabela-wrap"><table><thead><tr><th>Produto</th><th class="dir">Qtd</th><th class="dir">Valor total</th><th>TES</th><th>NF</th></tr></thead><tbody>${itens}</tbody></table></div></section>
 
           <section><h3>Linha do tempo</h3><ul class="linha-tempo">${tempo}</ul></section>
+          ${this.resp?.temHistorico ? `<details class="bloco-d" id="lg-hist" ${this.hist ? 'open' : ''}><summary data-acao="hist"><b>Histórico de alterações</b> <span class="muted">quem mudou o quê e quando</span></summary><div id="lg-hist-corpo">${this.histHtml()}</div></details>` : ''}
         </div>
         <footer class="rodape-gaveta">
           <span class="muted" id="lg-sujo"></span>
@@ -1374,6 +1457,225 @@ export class Painel {
       </aside>`;
     this.atualizarForm();
   }
+
+  // ---------- Custos de frete (ZLC) e historico (ZLH), API 2026-11-19a ----------
+  /** Frete cobrado x custo (bloco "Frete" da gaveta) */
+  private freteHtml(r: Reg): string {
+    const p = r.p;
+    const dif = r.cobrado - r.custo;
+    const rot = this.temCustos ? 'Custo de frete' : 'Custo de CTE';
+    const det = this.temCustos
+      ? (p.custos || []).length > 1
+        ? ` <span class="muted">(${(p.custos || []).length} cobranças)</span>`
+        : ''
+      : p.valorCteReentrega
+        ? ` <span class="muted">(reentrega ${rs(p.valorCteReentrega)})</span>`
+        : '';
+    return `<h3>Frete</h3>
+      <dl class="grade-info">
+        <div><dt>Cobrado no pedido</dt><dd>${rs(r.cobrado)} <span class="muted">(destacado ${rs(p.frete)} + não destacado ${rs(p.freteNaoDestacado)})</span></dd></div>
+        <div><dt>${rot}</dt><dd>${rs(r.custo)}${det}</dd></div>
+        <div><dt>Cobrado − custo</dt><dd class="${r.custo && dif < 0 ? 'crit-txt' : ''}">${r.custo ? rs(dif) : `<span class="muted">sem ${this.temCustos ? 'cobrança' : 'CTE'} lançado</span>`}</dd></div>
+      </dl>`;
+  }
+
+  /** Bloco "Custos de frete" da gaveta: resumo, lista das cobrancas e o formulario */
+  private custosHtml(r: Reg): string {
+    const lista = r.p.custos || [];
+    const resumo = lista.length
+      ? `${n0(lista.length)} cobrança${lista.length > 1 ? 's' : ''} · ${rs(r.custo)}${r.nDiv ? ` · <b class="crit-txt">${r.nDiv} em divergência</b>` : ''}`
+      : 'Nenhuma cobrança lançada';
+    const linhas = lista
+      .map((c) => {
+        const ed = this.custoEdit === c.item;
+        const dif = EM_ABERTO.includes(c.situacao) && c.valorEsperado > 0 ? c.valor - c.valorEsperado : 0;
+        return `<tr class="sem-clique${ed ? ' editando' : ''}">
+          <td class="mono">${esc(c.item)}</td>
+          <td>${esc(this.txtCusto('tipoCusto', c.tipo))}</td>
+          <td class="mono">${esc(c.cte) || '<span class="muted">–</span>'}</td>
+          <td>${fmt(c.data) || '<span class="muted">–</span>'}</td>
+          <td class="quebra">${esc(c.transportadoraNome || c.transportadora || '–')}</td>
+          <td class="dir num">${rs(c.valor)}${dif ? `<span class="cod-linha crit-txt">esperado ${rs(c.valorEsperado)} (${dif > 0 ? '+' : ''}${rs(dif)})</span>` : ''}</td>
+          <td><span class="pill ${COR_SITCUSTO[c.situacao] || 'semprev'}">${esc(this.txtCusto('situacaoCusto', c.situacao))}</span></td>
+          <td class="dir"><button type="button" class="btn-txt" data-acao="custo-editar" data-item="${esc(c.item)}" ${this.salvandoCusto ? 'disabled' : ''}>Editar</button></td>
+        </tr>${c.obs || c.usuario ? `<tr class="sem-clique sub"><td></td><td colspan="7">${c.obs ? `${esc(c.obs)} · ` : ''}<span class="muted">${esc(c.usuario)}${c.alteradoEm ? ` em ${fmt(c.alteradoEm.slice(0, 10))} ${esc(c.alteradoEm.slice(11, 16))}` : ''}</span></td></tr>` : ''}`;
+      })
+      .join('');
+    const tabela = lista.length
+      ? `<div class="tabela-wrap"><table class="custos"><thead><tr><th>Item</th><th>Tipo</th><th>CTE / doc.</th><th>Data</th><th>Transportadora</th><th class="dir">Valor</th><th>Situação</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`
+      : '<p class="muted">Lance aqui o CTE do envio e cada cobrança extra: reentrega, armazenagem, devolução, outras taxas.</p>';
+    const form = this.custoEdit !== null ? this.custoForm(r, lista.find((c) => c.item === this.custoEdit)) : `<p><button type="button" class="btn" data-acao="custo-novo" ${this.salvandoCusto ? 'disabled' : ''}>+ Adicionar cobrança</button></p>`;
+    return `<details class="bloco-d" id="lg-custos-d" ${this.custosAbertos || this.custoEdit !== null ? 'open' : ''}>
+      <summary data-acao="custos"><b>Custos de frete</b> <span class="muted">${resumo}</span></summary>
+      ${tabela}${form}</details>`;
+  }
+
+  /** Formulario de uma cobranca (nova ou em edicao) */
+  private custoForm(r: Reg, c?: Custo): string {
+    const p = r.p;
+    const lista = p.custos || [];
+    // nova: Envio se ainda nao tem; Reentrega se o pedido teve reentrega; senao Outra taxa
+    const tipoNovo = !lista.some((x) => x.tipo === 'E') ? 'E' : p.reentrega === 'SIM' && !lista.some((x) => x.tipo === 'R') ? 'R' : 'O';
+    const v = c || { item: '', tipo: tipoNovo, cte: '', data: iso(this.hoje), transportadora: p.transportadora, transportadoraNome: p.transportadoraNome, valor: 0, situacao: '', valorEsperado: 0, obs: '', usuario: '', alteradoEm: '' };
+    const transps = this.resp?.transportadoras || [];
+    const tr = v.transportadora ? `${v.transportadora} - ${transps.find(([k]) => k === v.transportadora)?.[1] || v.transportadoraNome || ''}` : '';
+    const ops = (o: Opcao[], sel: string, vazio = '') => `${vazio ? `<option value="">${esc(vazio)}</option>` : ''}${o.map(([k, t]) => `<option value="${esc(k)}" ${k === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
+    const dis = this.salvandoCusto ? 'disabled' : '';
+    return `<div class="form-log cform" id="lg-cform">
+      <fieldset class="grupo-f"><legend>${c ? `Cobrança ${esc(c.item)}` : 'Nova cobrança'}</legend>
+        <div class="campo"><label for="cf-tipo">Tipo</label><select id="cf-tipo" ${dis}>${ops(this.opCusto('tipoCusto'), v.tipo)}</select></div>
+        <div class="campo"><label for="cf-cte">CTE / documento</label><input id="cf-cte" type="text" maxlength="20" value="${esc(v.cte)}" ${dis}></div>
+        <div class="campo"><label for="cf-data">Data</label><div class="com-hoje"><input id="cf-data" type="date" value="${esc(v.data)}" ${dis}><button type="button" class="btn-txt" data-acao="cf-hoje" ${dis}>Hoje</button></div></div>
+        <div class="campo inteiro"><label for="cf-transp">Transportadora</label><input id="cf-transp" list="lg-transps" value="${esc(tr)}" placeholder="Código ou nome" ${dis}></div>
+        <div class="campo"><label for="cf-valor">Valor cobrado (R$)</label><input id="cf-valor" type="text" inputmode="decimal" value="${esc(numTxt(v.valor))}" ${dis}></div>
+        <div class="campo"><label for="cf-situa">Situação</label><select id="cf-situa" ${dis}>${ops(this.opCusto('situacaoCusto'), v.situacao, 'OK (sem divergência)')}</select></div>
+        <div class="campo"><label for="cf-esp">Valor esperado (R$)</label><input id="cf-esp" type="text" inputmode="decimal" value="${esc(numTxt(v.valorEsperado))}" placeholder="o combinado, se divergente" ${dis}></div>
+        <div class="campo inteiro"><label for="cf-obs">Observação</label><textarea id="cf-obs" rows="2" maxlength="250" placeholder="O que foi combinado, com quem e quando" ${dis}>${esc(v.obs)}</textarea></div>
+        <div class="inteiro acoes-cform">
+          ${c ? `<button type="button" class="btn-txt perigo" data-acao="custo-excluir" ${dis}>Excluir cobrança</button>` : ''}
+          <span class="muted" id="cf-msg" aria-live="polite"></span>
+          <button type="button" class="btn" data-acao="custo-cancelar" ${dis}>Cancelar</button>
+          <button type="button" class="btn pri" data-acao="custo-salvar" ${dis}>${this.salvandoCusto ? 'Gravando…' : 'Salvar cobrança'}</button>
+        </div>
+      </fieldset></div>`;
+  }
+
+  /** Redesenha so os blocos de custos e de frete (o formulario do pedido fica como esta) */
+  private redesenharCustos(): void {
+    const r = this.reg(this.aberto);
+    if (!r) return;
+    const box = this.el.camada.querySelector('#lg-custos');
+    if (box) box.innerHTML = this.custosHtml(r);
+    const fr = this.el.camada.querySelector('#lg-frete');
+    if (fr) fr.innerHTML = this.freteHtml(r);
+  }
+
+  private async salvarCusto(acao: 'incluir' | 'alterar' | 'excluir'): Promise<void> {
+    const r = this.reg(this.aberto);
+    if (!r || this.salvandoCusto) return;
+    const q = <T extends HTMLElement>(id: string) => this.el.camada.querySelector('#' + id) as T | null;
+    const msg = (t: string) => {
+      const m = q<HTMLElement>('cf-msg');
+      if (m) {
+        m.textContent = t;
+        m.classList.add('crit-txt');
+      }
+      this.aviso(t, true);
+    };
+    const corpo: CustoEdicao = { recno: r.p.recno, acao };
+    if (acao !== 'incluir') corpo.item = this.custoEdit || '';
+    if (acao === 'excluir') {
+      const c = (r.p.custos || []).find((x) => x.item === corpo.item);
+      if (!c) return;
+      if (!confirm(`Excluir a cobrança ${c.item} (${this.txtCusto('tipoCusto', c.tipo)}${c.cte ? ` · CTE ${c.cte}` : ''} · ${rs(c.valor)})?\n\nA exclusão fica registrada no histórico do pedido.`)) return;
+    } else {
+      const valor = numBR(q<HTMLInputElement>('cf-valor')?.value || '');
+      const esp = numBR(q<HTMLInputElement>('cf-esp')?.value || '');
+      const cte = (q<HTMLInputElement>('cf-cte')?.value || '').trim().toUpperCase();
+      const trTxt = (q<HTMLInputElement>('cf-transp')?.value || '').trim();
+      const tr = trTxt.includes(' - ') ? trTxt.split(' - ')[0].trim() : trTxt.toUpperCase();
+      const situ = q<HTMLSelectElement>('cf-situa')?.value || '';
+      if (Number.isNaN(valor) || valor < 0) return msg('Valor cobrado inválido (use 1.234,56).');
+      if (Number.isNaN(esp) || esp < 0) return msg('Valor esperado inválido (use 1.234,56).');
+      if (!valor && !cte) return msg('Informe o valor ou o número do CTE/documento.');
+      if (tr && !(this.resp?.transportadoras || []).some(([k]) => k === tr)) return msg(`Transportadora "${tr}" não encontrada no cadastro (escolha na lista).`);
+      Object.assign(corpo, {
+        tipo: q<HTMLSelectElement>('cf-tipo')?.value || 'O',
+        cte,
+        data: q<HTMLInputElement>('cf-data')?.value || '',
+        transportadora: tr,
+        valor,
+        valorEsperado: esp,
+        situacao: situ,
+        obs: (q<HTMLTextAreaElement>('cf-obs')?.value || '').replace(/\s*\r?\n\s*/g, ' ').trim(),
+      });
+      if (acao === 'alterar') {
+        // so o que mudou (o historico grava campo a campo)
+        const c = (r.p.custos || []).find((x) => x.item === corpo.item);
+        if (c) {
+          const atual: Record<string, string | number> = { tipo: c.tipo, cte: c.cte, data: c.data, transportadora: c.transportadora, valor: c.valor, valorEsperado: c.valorEsperado, situacao: c.situacao, obs: c.obs };
+          const b = corpo as unknown as Record<string, string | number>;
+          Object.keys(atual).forEach((k) => {
+            const a = atual[k];
+            if (typeof a === 'number' ? Math.abs(a - Number(b[k])) < 0.005 : String(a) === String(b[k])) delete b[k];
+          });
+          if (Object.keys(b).length <= 3) {
+            this.custoEdit = null;
+            this.redesenharCustos();
+            return;
+          }
+        }
+      }
+    }
+    this.salvandoCusto = true;
+    this.redesenharCustos();
+    try {
+      const novo = await this.api.salvarCusto(corpo);
+      this.salvandoCusto = false;
+      if (novo && novo.pedido) {
+        const i = this.regs.findIndex((x) => x.p.recno === r.p.recno);
+        if (i >= 0) this.regs[i] = this.montar(novo);
+      }
+      this.custoEdit = null;
+      this.custosAbertos = true;
+      // historico mudou: le de novo se o bloco estiver aberto
+      if (this.hist) void this.carregarHist();
+      this.redesenharCustos();
+      this.desenhar();
+      this.aviso(acao === 'excluir' ? 'Cobrança excluída.' : acao === 'incluir' ? 'Cobrança incluída.' : 'Cobrança salva.');
+      if (novo?.avisoHistorico) this.aviso(novo.avisoHistorico, true);
+    } catch (e) {
+      this.salvandoCusto = false;
+      this.redesenharCustos();
+      msg(`Não foi possível gravar a cobrança: ${this.api.mensagemErro(e)}`);
+    }
+  }
+
+  private async carregarHist(): Promise<void> {
+    const r = this.reg(this.aberto);
+    if (!r) return;
+    const pedido = r.p.pedido;
+    this.hist = { pedido, linhas: this.hist?.pedido === pedido ? this.hist.linhas : null, erro: '' };
+    const corpo = () => this.el.camada.querySelector('#lg-hist-corpo');
+    if (!this.hist.linhas) {
+      const c = corpo();
+      if (c) c.innerHTML = this.histHtml();
+    }
+    try {
+      const linhas = await this.api.historico(pedido);
+      if (this.hist?.pedido !== pedido) return;
+      this.hist = { pedido, linhas, erro: '' };
+    } catch (e) {
+      if (this.hist?.pedido !== pedido) return;
+      this.hist = { pedido, linhas: null, erro: this.api.mensagemErro(e) };
+    }
+    const c = corpo();
+    if (c) c.innerHTML = this.histHtml();
+  }
+
+  private histHtml(): string {
+    const h = this.hist;
+    if (!h) return '<p class="muted">Abra para ver.</p>';
+    if (h.erro) return `<p class="erro">Não foi possível ler o histórico: ${esc(h.erro)}</p>`;
+    if (!h.linhas) return '<p class="muted">Carregando…</p>';
+    if (!h.linhas.length) return '<p class="muted">Nenhuma alteração registrada ainda. O histórico começa a partir da criação da tabela (alterações feitas pela tela e pela importação).</p>';
+    const campoSC5 = Object.fromEntries(Object.entries(CAMPO).map(([k, c]) => [c, k])) as Record<string, keyof PedidoEdicao>;
+    const ORIGEM: Record<string, string> = { '2': 'Importação', '3': 'Carga inicial' };
+    const val = (s: string) => (s ? esc(s) : '<span class="muted">(vazio)</span>');
+    return `<ul class="hist">${h.linhas
+      .map((l) => {
+        const quem = `${fmt(l.data)} ${esc(l.hora.slice(0, 5))} · ${esc(l.usuario || l.codUsuario || '?')}${ORIGEM[l.origem] ? ` <span class="pill semprev">${ORIGEM[l.origem]}</span>` : ''}`;
+        let o = '';
+        if (l.item && l.campo === 'ZLC') o = l.acao === 'E' ? `<b>Cobrança ${esc(l.item)} excluída</b> · ${val(l.de)}` : `<b>Cobrança ${esc(l.item)} incluída</b> · ${val(l.para)}`;
+        else {
+          const rot = l.item ? `Cobrança ${esc(l.item)} · ${esc(ROTULO_CUSTO[l.campo] || l.titulo)}` : esc(campoSC5[l.campo] ? this.rotulo(campoSC5[l.campo]) : l.titulo || l.campo);
+          o = `<b>${rot}</b>: ${val(l.de)} → ${val(l.para)}`;
+        }
+        return `<li><span class="h-quem">${quem}</span><span class="h-o">${o}</span></li>`;
+      })
+      .join('')}</ul>`;
+  }
+
 
   /** Valores do formulario no formato do PUT */
   private lerForm(): PedidoEdicao {
@@ -1429,6 +1731,8 @@ export class Painel {
     if (f['reentrega'] === 'N') {
       REENTREGA.forEach((k) => {
         if (this.faltando.has(CAMPO[k])) return;
+        // com a tabela de custos o CTE da reentrega e uma cobranca: nao limpa por aqui
+        if (this.temCustos && k !== 'dataNovaEntrega') return;
         const a = atual[k];
         if (a && a !== 0) out[k] = NUMEROS.includes(k) ? 0 : '';
         else delete out[k];
@@ -1531,7 +1835,9 @@ export class Painel {
     if (final && prev && final > prev && !v.indicador) avisos.push('Entrega depois da previsão: escolha o indicador de atraso.');
     if (!final && !ret && prev && prev < iso(this.hoje) && env && !v.indicador) avisos.push('Previsão vencida e sem entrega: escolha o indicador de atraso.');
     if (v.reentrega === 'S' && !nova) avisos.push('Reentrega sem a nova data de entrega: o pedido continua em Enviados até ela ser informada.');
-    if (env && !v.cte) avisos.push('Falta o número do CTE.');
+    if (this.temCustos) {
+      if (env && !(p.custos || []).some((c) => c.tipo === 'E')) avisos.push('Falta lançar o CTE do envio em Custos de frete.');
+    } else if (env && !v.cte) avisos.push('Falta o número do CTE.');
     const sai = v.previsaoSaida || '';
     if (sai && !env && sai < iso(this.hoje)) avisos.push(`A saída programada (${fmt(sai)}) passou e o pedido não saiu: informe a data de envio ou reprograme.`);
     if (!(p.notas || []).length) {
@@ -1606,13 +1912,16 @@ export class Painel {
 
   // ---------- camada, avisos, diagnostico ----------
   private fecharCamada(): void {
-    if (this.salvando) return;
+    if (this.salvando || this.salvandoCusto) return;
     this.el.camada.innerHTML = '';
     this.aberto = 0;
+    this.custoEdit = null;
+    this.hist = null;
   }
   private fecharComConfirmacao(): void {
     const r = this.reg(this.aberto);
     if (r && Object.keys(this.alteracoes(r.p)).length && !confirm('Há alterações não salvas neste pedido. Fechar mesmo assim?')) return;
+    if (this.custoEdit !== null && !confirm('Há uma cobrança de frete aberta e não salva. Fechar mesmo assim?')) return;
     this.fecharCamada();
   }
   aviso(texto: string, erro = false): void {
@@ -1860,7 +2169,7 @@ export class Painel {
     this.desenharImp();
     for (const L of fila) {
       try {
-        const novo = await this.api.salvar(L.recno, L.dados);
+        const novo = await this.api.salvar(L.recno, L.dados, 'importacao');
         L.res = 'ok';
         if (novo && novo.pedido) {
           const i = this.regs.findIndex((x) => x.p.recno === L.recno);
@@ -2064,6 +2373,24 @@ export class Painel {
         else if (a === 'fechar') this.fecharComConfirmacao();
         else if (a === 'fechar-modal') this.fecharModal();
         else if (a === 'salvar') void this.salvar();
+        else if (a === 'custos') this.custosAbertos = !(this.el.camada.querySelector('#lg-custos-d') as HTMLDetailsElement | null)?.open;
+        else if (a === 'custo-novo' || a === 'custo-editar') {
+          this.custoEdit = a === 'custo-novo' ? '' : ac.dataset['item'] || '';
+          this.custosAbertos = true;
+          this.redesenharCustos();
+          (this.el.camada.querySelector('#cf-tipo') as HTMLElement | null)?.focus();
+        } else if (a === 'custo-cancelar') {
+          this.custoEdit = null;
+          this.redesenharCustos();
+        } else if (a === 'custo-salvar') void this.salvarCusto(this.custoEdit ? 'alterar' : 'incluir');
+        else if (a === 'custo-excluir') void this.salvarCusto('excluir');
+        else if (a === 'hist') {
+          // o clique abre o <details>; le na 1a vez (ou de novo, se deu erro)
+          if (!this.hist || this.hist.erro) void this.carregarHist();
+        } else if (a === 'cf-hoje') {
+          const d = this.el.camada.querySelector('#cf-data') as HTMLInputElement | null;
+          if (d) d.value = iso(this.hoje);
+        }
         else if (a === 'limpar-filtros') this.limparFiltros();
         else if (a === 'mais-lista') {
           this.e.limite += 300;

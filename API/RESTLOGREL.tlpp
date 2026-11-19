@@ -70,6 +70,32 @@
 //   - combo: so codigo existente no X3_CBOX; texto no limite do TamSX3.
 //   Responde o pedido como o GET mostra, para a tela atualizar o cartao.
 //
+// CUSTOS DE FRETE E HISTORICO (2026-11-19a, pedido do usuario em 19/11/2026)
+//   Tabelas novas, criadas pelo U_LOGRELUPD (opcao Tabelas):
+//   - ZLC = custos de frete do pedido, uma linha por cobranca (CTE do envio,
+//     reentregas, armazenagem, devolucao, outras taxas): ZLC_ITEM (001, 002...,
+//     gerado aqui), ZLC_TIPO (E/R/A/D/O), ZLC_CTE, ZLC_DATA, ZLC_TRANSP,
+//     ZLC_VALOR, ZLC_SITUA (vazio = ok; D divergente, C em contato, A ajustado,
+//     I aceito como veio), ZLC_VLRESP (valor esperado, opcional), ZLC_OBS e
+//     quem/quando alterou. Exclusao logica (D_E_L_E_T_).
+//   - ZLH = historico da logistica: cada alteracao feita pela tela (ou pela
+//     importacao) no pedido (SC5) ou numa cobranca (ZLC): campo, antes, depois,
+//     usuario, data e hora.
+//   Com a ZLC, os campos de CTE da SC5 (C5_ZCTE, C5_ZVLRCTE, C5_ZCTEREE,
+//   C5_ZVCTERE) ficam parados (a carga inicial copia para a ZLC) e as chaves
+//   cte/valorCte/cteReentrega/valorCteReentrega do PUT (importacao) gravam na
+//   1a cobranca de Envio/Reentrega da ZLC. Sem as tabelas, tudo como antes.
+//   Tabela e colunas conferidas no ALL_TAB_COLUMNS (TemTab) antes de usar.
+//   - GET  /logistica/pedidos: cada pedido ganha "custos" (lista da ZLC);
+//     "temCustos"/"temHistorico" no topo; opcoes "tipoCusto"/"situacaoCusto".
+//   - POST /logistica/custos {"recno", "acao": incluir|alterar|excluir,
+//     "item", "tipo", "cte", "data", "transportadora", "valor",
+//     "valorEsperado", "situacao", "obs"}: responde o pedido como o GET.
+//   - GET  /logistica/historico?pedido=NNNNNN: linhas da ZLH, mais novas antes.
+//   - PUT  /logistica/pedidos/:recno: grava o historico das mudancas da SC5;
+//     "origem": "importacao" no corpo marca a linha como importacao.
+//   So rotas no formato das que ja existem (GET com query, POST simples).
+//
 // Acesso: SEM a trava U_VSAPIACE/MV_VSAPUSR desde 2026-11-18a, por pedido do
 // usuario (18/11/2026). Quem abre a tela pelo menu (U_LOGRELAPP) usa a API.
 // Nao depende mais do VSACESSO.tlpp.
@@ -78,7 +104,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-18a"
+#define LG_VERSAO     "2026-11-19a"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -114,6 +140,7 @@ Static Function LerPedidos()
    Local aFalta      := {}
    Local aPed        := {}
    Local cAlAberto   := ""
+   Local lCus        := .F.
 
    oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
    oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
@@ -148,6 +175,11 @@ Static Function LerPedidos()
       jOpc["reentrega"]    := OpcoesCombo("C5_ZREENTR")
       jOpc["tipoPedido"]   := OpcoesCombo("C5_ZTPPEDI")
       jOpc["motivoRetorno"]:= OpcoesCombo("C5_ZMOTRET")
+      lCus := TemTab("ZLC")
+      If lCus
+         jOpc["tipoCusto"]     := OpcoesCombo("ZLC_TIPO")
+         jOpc["situacaoCusto"] := OpcoesCombo("ZLC_SITUA")
+      EndIf
 
       cEtapa := "04-resposta"
       jResp["versao"]          := LG_VERSAO
@@ -155,6 +187,8 @@ Static Function LerPedidos()
       jResp["de"]              := IsoOut(dDe)
       jResp["ate"]             := IsoOut(dAte)
       jResp["camposFaltando"]  := aFalta
+      jResp["temCustos"]       := lCus
+      jResp["temHistorico"]    := TemTab("ZLH")
       jResp["opcoes"]          := jOpc
       jResp["tamanhos"]        := Tamanhos()
       jResp["transportadoras"] := Transportadoras()
@@ -229,6 +263,17 @@ Static Function GravaPedido()
    Local aPed        := {}
    Local aIgnora     := {}
    Local cAlAberto   := ""
+   Local lCus        := .F.
+   Local lHis        := .F.
+   Local lChCus      := .F.
+   Local cOrigem     := "1"
+   Local aCusto      := {}
+   Local aHist       := {}
+   Local xAnt        := Nil
+   Local xNov        := Nil
+   Local cHA         := ""
+   Local cHN         := ""
+   Local cAvisoH     := ""
 
    oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
    oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
@@ -261,6 +306,12 @@ Static Function GravaPedido()
       EndIf
       cPedido := SC5->C5_NUM
       dEmis   := SC5->C5_EMISSAO
+      // Custos na ZLC e historico na ZLH, se as tabelas existem (2026-11-19a)
+      lCus := TemTab("ZLC")
+      lHis := TemTab("ZLH")
+      If Upper(AllTrim(SStr(jBody["origem"]))) == "IMPORTACAO"
+         cOrigem := "2"
+      EndIf
 
       cEtapa := "03-campos"
       For nI := 1 to Len(aMapa)
@@ -270,7 +321,9 @@ Static Function GravaPedido()
          If !jBody:HasProperty(cChave)
             Loop
          EndIf
-         If SC5->(FieldPos(cCampo)) == 0
+         // CTE e valor (envio e reentrega) vao para a ZLC quando ela existe
+         lChCus := lCus .and. ("|" + cCampo + "|") $ "|C5_ZCTE|C5_ZVLRCTE|C5_ZCTEREE|C5_ZVCTERE|"
+         If !lChCus .and. SC5->(FieldPos(cCampo)) == 0
             aAdd(aFalta, cCampo)
             Loop
          EndIf
@@ -342,7 +395,12 @@ Static Function GravaPedido()
             EndIf
          EndIf
          // texto maior que o campo (memo nao tem limite)
-         If ValType(xVal) == "C" .and. ValType(SC5->(FieldGet(FieldPos(cCampo)))) == "C" .and. TamSX3(cCampo)[3] != "M" .and. Len(xVal) > TamSX3(cCampo)[1]
+         If lChCus .and. ValType(xVal) == "C" .and. Len(xVal) > TamSX3("ZLC_CTE")[1]
+            jRet := BuildErro(400, "TEXTO_GRANDE", cChave + " com mais de " + cValToChar(TamSX3("ZLC_CTE")[1]) + " caracteres.")
+            lRespondido := .T.
+            Break
+         EndIf
+         If !lChCus .and. ValType(xVal) == "C" .and. ValType(SC5->(FieldGet(FieldPos(cCampo)))) == "C" .and. TamSX3(cCampo)[3] != "M" .and. Len(xVal) > TamSX3(cCampo)[1]
             jRet := BuildErro(400, "TEXTO_GRANDE", cChave + " com mais de " + cValToChar(TamSX3(cCampo)[1]) + " caracteres.")
             lRespondido := .T.
             Break
@@ -354,7 +412,11 @@ Static Function GravaPedido()
          ElseIf aMapa[nI][4] == "RET" .and. !Empty(xVal)
             lRetCampos := .T.
          EndIf
-         aAdd(aGrava, {cCampo, xVal, cTipo})
+         If lChCus
+            aAdd(aCusto, {cCampo, xVal})
+         Else
+            aAdd(aGrava, {cCampo, xVal, cTipo})
+         EndIf
       Next nI
 
       If Len(aFalta) > 0
@@ -362,7 +424,7 @@ Static Function GravaPedido()
          lRespondido := .T.
          Break
       EndIf
-      If Len(aGrava) == 0
+      If Len(aGrava) == 0 .and. Len(aCusto) == 0
          jRet := BuildErro(400, "SEM_CAMPOS", "Nenhum campo para gravar.")
          lRespondido := .T.
          Break
@@ -427,22 +489,45 @@ Static Function GravaPedido()
       EndIf
 
       cEtapa := "05-gravacao"
-      If !RecLock("SC5", .F.)
-         jRet := BuildErro(409, "PEDIDO_EM_USO", "Pedido " + AllTrim(cPedido) + " em uso por outro usuario. Tente de novo.")
-         lRespondido := .T.
-         Break
+      If Len(aGrava) > 0
+         If !RecLock("SC5", .F.)
+            jRet := BuildErro(409, "PEDIDO_EM_USO", "Pedido " + AllTrim(cPedido) + " em uso por outro usuario. Tente de novo.")
+            lRespondido := .T.
+            Break
+         EndIf
+         lTravou := .T.
+         For nI := 1 to Len(aGrava)
+            nPos := SC5->(FieldPos(aGrava[nI][1]))
+            xAnt := SC5->(FieldGet(nPos))
+            xNov := Converte(aGrava[nI][2], ValType(xAnt))
+            // historico: so o que mudou de fato (antes x depois em texto)
+            cHA := HistTxt(xAnt, aGrava[nI][1])
+            cHN := HistTxt(xNov, aGrava[nI][1])
+            If !(cHA == cHN)
+               aAdd(aHist, {"", "A", aGrava[nI][1], TituloCampo(aGrava[nI][1]), cHA, cHN})
+            EndIf
+            SC5->(FieldPut(nPos, xNov))
+         Next nI
+         SC5->(MsUnlock())
+         lTravou := .F.
       EndIf
-      lTravou := .T.
-      For nI := 1 to Len(aGrava)
-         nPos := SC5->(FieldPos(aGrava[nI][1]))
-         SC5->(FieldPut(nPos, Converte(aGrava[nI][2], ValType(SC5->(FieldGet(nPos))))))
-      Next nI
-      SC5->(MsUnlock())
-      lTravou := .F.
+
+      cEtapa := "05b-custos"
+      If Len(aCusto) > 0
+         CustoDoPedido(cPedido, aCusto, dEnv, dNova, SC5->C5_TRANSP, @aHist)
+      EndIf
+
+      cEtapa := "05c-historico"
+      If lHis .and. Len(aHist) > 0
+         cAvisoH := GravaHists(cPedido, aHist, cOrigem)
+      EndIf
 
       cEtapa := "06-resposta"
       aPed := ConsultaPedidos(CToD(""), CToD(""), {cPedido}, @aIgnora, @cEtapa, @cAlAberto)
       If Len(aPed) > 0
+         If !Empty(cAvisoH)
+            aPed[1]["avisoHistorico"] := TxtOut(cAvisoH)
+         EndIf
          jRet := oRest:setStatusResponse(200, aPed[1]:ToJson())
       Else
          // gravou, mas o pedido nao tem item (nao deveria acontecer na busca sem filtro)
@@ -608,6 +693,40 @@ Static Function MapaCampos()
    // frete destacado (C5_FRETE) e nao destacado (C5_ZFRETE): so consulta
    // desde 2026-11-15a (pedido do usuario); o GET continua mandando
 Return aMapa
+
+// Titulo legivel do campo (SC5 ou ZLC) para o historico (ZLH_TITULO)
+Static Function TituloCampo(cCampo)
+   Local aT := {{"C5_FECENT", "Saida programada"}, ;
+      {"C5_ZDTENV", "Data de envio"}, ;
+      {"C5_ZDTPREV", "Previsao de entrega"}, ;
+      {"C5_ZDTENTR", "Data de entrega"}, ;
+      {"C5_ZTPMAT", "Tipo de material"}, ;
+      {"C5_ZCTE", "CTE"}, ;
+      {"C5_ZVLRCTE", "Valor do CTE"}, ;
+      {"C5_ZREENTR", "Gerou reentrega"}, ;
+      {"C5_ZCTEREE", "CTE da reentrega"}, ;
+      {"C5_ZVCTERE", "Valor CTE reentrega"}, ;
+      {"C5_ZNDENT", "Nova data de entrega"}, ;
+      {"C5_ZINDICA", "Indicador de atraso"}, ;
+      {"C5_ZDTRET", "Data do retorno"}, ;
+      {"C5_ZMOTRET", "Motivo do retorno"}, ;
+      {"C5_ZPEDREN", "Pedido do reenvio"}, ;
+      {"C5_ZOBS", "Observacoes da entrega"}, ;
+      {"C5_TRANSP", "Transportadora"}, ;
+      {"C5_VOLUME1", "Volume"}, ;
+      {"C5_ESPECI1", "Especie"}, ;
+      {"C5_PESOL", "Peso liquido"}, ;
+      {"C5_PBRUTO", "Peso bruto"}, ;
+      {"ZLC_TIPO", "Tipo da cobranca"}, ;
+      {"ZLC_CTE", "CTE / documento"}, ;
+      {"ZLC_DATA", "Data da cobranca"}, ;
+      {"ZLC_TRANSP", "Transportadora da cobranca"}, ;
+      {"ZLC_VALOR", "Valor cobrado"}, ;
+      {"ZLC_SITUA", "Situacao"}, ;
+      {"ZLC_VLRESP", "Valor esperado"}, ;
+      {"ZLC_OBS", "Observacao da cobranca"}}
+   Local nP := aScan(aT, {|x| x[1] == AllTrim(cCampo)})
+Return IIf(nP > 0, aT[nP][2], AllTrim(cCampo))
 
 // Data final do campo: a do corpo, senao a gravada (campo inexistente = vazia)
 Static Function DataFinal(aGrava, cCampo)
@@ -916,6 +1035,9 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
 
    cEtapa := "02c-series"
    NumerosSerie(aPed, @aFalta)
+
+   cEtapa := "02d-custos"
+   CustosPedidos(aPed)
 Return aPed
 
 // Numeros de serie da Z01 (como o RX Pedidos): em cada item, "numerosSerie" =
@@ -1152,6 +1274,736 @@ Static Function Transportadoras()
    EndIf
    oStmt:Destroy()
 Return aRet
+
+// ----------------------------------------------------------------------------
+// Custos de frete (ZLC) e historico (ZLH) - 2026-11-19a
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} postVsLogCusto
+Inclui, altera ou exclui (logico) uma cobranca de frete do pedido (ZLC) e grava
+o historico (ZLH). Responde o pedido no formato do GET.
+@type function
+@author Romulo Garcia
+@since 19/11/2026
+@body {"recno": 123, "acao": "incluir"|"alterar"|"excluir", "item": "001", "tipo": "E", "cte": "...", "data": "AAAA-MM-DD", "transportadora": "000001", "valor": 0, "valorEsperado": 0, "situacao": "D", "obs": "..."}
+/*/
+@Post("/api/v1/vs-financial-data/logistica/custos")
+User Function postVsLogCusto() as Logical
+Return GravaCusto()
+
+Static Function GravaCusto()
+   Local jBody       := JsonObject():New()
+   Local jRet        := Nil
+   Local xErrJson    := Nil
+   Local bErrOld     := ErrorBlock({|oE| Break(oE) })
+   Local oErrCap     := Nil
+   Local cEtapa      := "00-inicio"
+   Local lRespondido := .F.
+   Local lTravou     := .F.
+   Local nRecno      := 0
+   Local cAcao       := ""
+   Local cItem       := ""
+   Local cPedido     := ""
+   Local cOrigem     := "1"
+   Local aVal        := {}
+   Local aHist       := {}
+   Local cTxt        := ""
+   Local xVal        := Nil
+   Local xAnt        := Nil
+   Local nI          := 0
+   Local nPos        := 0
+   Local lHis        := .F.
+   Local aPed        := {}
+   Local aIgnora     := {}
+   Local cAlAberto   := ""
+   Local cAvisoH     := ""
+   Local cResumo     := ""
+   Local cHA         := ""
+   Local cHN         := ""
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      cEtapa := "01-parametros"
+      xErrJson := jBody:FromJson(SStr(oRest:getBodyRequest()))
+      If ValType(xErrJson) == "C"
+         jRet := BuildErro(400, "JSON_INVALIDO", "Corpo da requisicao nao e um JSON valido.")
+         lRespondido := .T.
+         Break
+      EndIf
+      nRecno := NNum(jBody["recno"])
+      cAcao  := Lower(AllTrim(SStr(jBody["acao"])))
+      If aScan({"incluir", "alterar", "excluir"}, cAcao) == 0
+         jRet := BuildErro(400, "ACAO_INVALIDA", "acao deve ser incluir, alterar ou excluir.")
+         lRespondido := .T.
+         Break
+      EndIf
+      If ValType(jBody["item"]) == "N"
+         cItem := StrZero(jBody["item"], 3)
+      Else
+         cItem := AllTrim(SStr(jBody["item"]))
+      EndIf
+      If Upper(AllTrim(SStr(jBody["origem"]))) == "IMPORTACAO"
+         cOrigem := "2"
+      EndIf
+
+      cEtapa := "02-pedido"
+      If !TemTab("ZLC")
+         jRet := BuildErro(409, "SEM_TABELA_CUSTOS", "Tabela de custos de frete (ZLC) nao criada neste ambiente: rodar o U_LOGRELUPD, opcao Tabelas.")
+         lRespondido := .T.
+         Break
+      EndIf
+      lHis := TemTab("ZLH")
+      If nRecno <= 0
+         jRet := BuildErro(400, "RECNO_INVALIDO", "Informe o recno do pedido.")
+         lRespondido := .T.
+         Break
+      EndIf
+      DbSelectArea("SC5")
+      SC5->(DbGoTo(nRecno))
+      If SC5->(Eof()) .or. SC5->(Deleted()) .or. SC5->C5_FILIAL != FWxFilial("SC5")
+         jRet := BuildErro(404, "PEDIDO_NAO_ENCONTRADO", "Pedido nao encontrado (excluido ou de outra filial).")
+         lRespondido := .T.
+         Break
+      EndIf
+      cPedido := SC5->C5_NUM
+
+      cEtapa := "03-campos"
+      If cAcao != "excluir"
+         If jBody:HasProperty("tipo")
+            cTxt := Upper(AllTrim(TxtIn(jBody["tipo"])))
+            If Empty(cTxt) .or. !CodigoNoCombo("ZLC_TIPO", cTxt)
+               jRet := BuildErro(400, "TIPO_INVALIDO", "Tipo da cobranca [" + cTxt + "] nao existe no combo do ZLC_TIPO.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_TIPO", cTxt})
+         ElseIf cAcao == "incluir"
+            jRet := BuildErro(400, "TIPO_OBRIGATORIO", "Informe o tipo da cobranca.")
+            lRespondido := .T.
+            Break
+         EndIf
+         If jBody:HasProperty("cte")
+            cTxt := AllTrim(TxtIn(jBody["cte"]))
+            If Len(cTxt) > TamSX3("ZLC_CTE")[1]
+               jRet := BuildErro(400, "TEXTO_GRANDE", "CTE com mais de " + cValToChar(TamSX3("ZLC_CTE")[1]) + " caracteres.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_CTE", cTxt})
+         EndIf
+         If jBody:HasProperty("data")
+            cTxt := AllTrim(SStr(jBody["data"]))
+            xVal := IsoIn(cTxt)
+            If !Empty(cTxt) .and. Empty(xVal)
+               jRet := BuildErro(400, "DATA_INVALIDA", "data: data invalida (use AAAA-MM-DD).")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_DATA", xVal})
+         EndIf
+         If jBody:HasProperty("transportadora")
+            cTxt := Upper(AllTrim(TxtIn(jBody["transportadora"])))
+            If !Empty(cTxt) .and. !ExisteTransp(cTxt)
+               jRet := BuildErro(400, "TRANSPORTADORA_INVALIDA", "Transportadora " + cTxt + " nao cadastrada (SA4).")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_TRANSP", cTxt})
+         EndIf
+         If jBody:HasProperty("valor")
+            xVal := NumIn(jBody["valor"])
+            If xVal < 0
+               jRet := BuildErro(400, "VALOR_INVALIDO", "valor negativo.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_VALOR", Round(xVal, 2)})
+         EndIf
+         If jBody:HasProperty("valorEsperado")
+            xVal := NumIn(jBody["valorEsperado"])
+            If xVal < 0
+               jRet := BuildErro(400, "VALOR_INVALIDO", "valorEsperado negativo.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_VLRESP", Round(xVal, 2)})
+         EndIf
+         If jBody:HasProperty("situacao")
+            cTxt := Upper(AllTrim(TxtIn(jBody["situacao"])))
+            If !Empty(cTxt) .and. !CodigoNoCombo("ZLC_SITUA", cTxt)
+               jRet := BuildErro(400, "SITUACAO_INVALIDA", "Situacao [" + cTxt + "] nao existe no combo do ZLC_SITUA.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_SITUA", cTxt})
+         EndIf
+         If jBody:HasProperty("obs")
+            // campo caracter: quebra de linha vira espaco
+            cTxt := TxtIn(jBody["obs"])
+            cTxt := AllTrim(StrTran(StrTran(StrTran(cTxt, Chr(13) + Chr(10), " "), Chr(13), " "), Chr(10), " "))
+            If Len(cTxt) > TamSX3("ZLC_OBS")[1]
+               jRet := BuildErro(400, "TEXTO_GRANDE", "Observacao com mais de " + cValToChar(TamSX3("ZLC_OBS")[1]) + " caracteres.")
+               lRespondido := .T.
+               Break
+            EndIf
+            aAdd(aVal, {"ZLC_OBS", cTxt})
+         EndIf
+         If cAcao == "incluir" .and. ValorDe(aVal, "ZLC_VALOR", 0) <= 0 .and. Empty(ValorDe(aVal, "ZLC_CTE", ""))
+            jRet := BuildErro(400, "SEM_VALOR", "Informe o valor ou o numero do CTE/documento.")
+            lRespondido := .T.
+            Break
+         EndIf
+      EndIf
+
+      cEtapa := "04-registro"
+      DbSelectArea("ZLC")
+      ZLC->(DbSetOrder(1)) // ZLC_FILIAL+ZLC_PEDIDO+ZLC_ITEM
+      If cAcao != "incluir"
+         If Empty(cItem) .or. !ZLC->(DbSeek(FWxFilial("ZLC") + PadR(cPedido, TamSX3("ZLC_PEDIDO")[1]) + PadR(cItem, TamSX3("ZLC_ITEM")[1])))
+            jRet := BuildErro(404, "COBRANCA_NAO_ENCONTRADA", "Cobranca " + cItem + " do pedido " + AllTrim(cPedido) + " nao encontrada (ja excluida?).")
+            lRespondido := .T.
+            Break
+         EndIf
+      EndIf
+
+      cEtapa := "05-gravacao"
+      If cAcao == "incluir"
+         cItem := ProxItem(cPedido)
+         RecLock("ZLC", .T.)
+         lTravou := .T.
+         ZLC->ZLC_FILIAL := FWxFilial("ZLC")
+         ZLC->ZLC_PEDIDO := cPedido
+         ZLC->ZLC_ITEM   := cItem
+         // sem transportadora no corpo: a do pedido
+         ZLC->ZLC_TRANSP := SC5->C5_TRANSP
+         For nI := 1 to Len(aVal)
+            ZLC->(FieldPut(ZLC->(FieldPos(aVal[nI][1])), aVal[nI][2]))
+         Next nI
+         Carimbo()
+         cResumo := ResumoCusto()
+         ZLC->(MsUnlock())
+         lTravou := .F.
+         aAdd(aHist, {cItem, "I", "ZLC", "Cobranca incluida", "", cResumo})
+      ElseIf cAcao == "alterar"
+         cItem := ZLC->ZLC_ITEM
+         If !RecLock("ZLC", .F.)
+            jRet := BuildErro(409, "COBRANCA_EM_USO", "Cobranca em uso por outro usuario. Tente de novo.")
+            lRespondido := .T.
+            Break
+         EndIf
+         lTravou := .T.
+         For nI := 1 to Len(aVal)
+            nPos := ZLC->(FieldPos(aVal[nI][1]))
+            xAnt := ZLC->(FieldGet(nPos))
+            cHA  := HistTxt(xAnt, aVal[nI][1])
+            cHN  := HistTxt(aVal[nI][2], aVal[nI][1])
+            If !(cHA == cHN)
+               aAdd(aHist, {cItem, "A", aVal[nI][1], TituloCampo(aVal[nI][1]), cHA, cHN})
+            EndIf
+            ZLC->(FieldPut(nPos, aVal[nI][2]))
+         Next nI
+         If Len(aHist) > 0
+            Carimbo()
+         EndIf
+         ZLC->(MsUnlock())
+         lTravou := .F.
+      Else
+         cItem   := ZLC->ZLC_ITEM
+         cResumo := ResumoCusto()
+         If !RecLock("ZLC", .F.)
+            jRet := BuildErro(409, "COBRANCA_EM_USO", "Cobranca em uso por outro usuario. Tente de novo.")
+            lRespondido := .T.
+            Break
+         EndIf
+         lTravou := .T.
+         // quem excluiu fica na propria linha (exclusao logica) e no historico
+         Carimbo()
+         ZLC->(DbDelete())
+         ZLC->(MsUnlock())
+         lTravou := .F.
+         aAdd(aHist, {cItem, "E", "ZLC", "Cobranca excluida", cResumo, ""})
+      EndIf
+
+      cEtapa := "05b-historico"
+      If lHis .and. Len(aHist) > 0
+         cAvisoH := GravaHists(cPedido, aHist, cOrigem)
+      EndIf
+
+      cEtapa := "06-resposta"
+      aPed := ConsultaPedidos(CToD(""), CToD(""), {cPedido}, @aIgnora, @cEtapa, @cAlAberto)
+      If Len(aPed) > 0
+         aPed[1]["itemCusto"] := AllTrim(cItem)
+         If !Empty(cAvisoH)
+            aPed[1]["avisoHistorico"] := TxtOut(cAvisoH)
+         EndIf
+         jRet := oRest:setStatusResponse(200, aPed[1]:ToJson())
+      Else
+         jRet := oRest:setStatusResponse(200, '{"recno":' + cValToChar(nRecno) + ',"aviso":"gravado"}')
+      EndIf
+      lRespondido := .T.
+
+   Recover Using oErrCap
+      If lTravou
+         ZLC->(MsUnlock())
+      EndIf
+      If !Empty(cAlAberto) .and. Select(cAlAberto) > 0
+         (cAlAberto)->(DbCloseArea())
+      EndIf
+      oRest:setKeyHeaderResponse("X-Erro-Etapa", cEtapa)
+      If !lRespondido
+         jRet := BuildErro(500, "ERRO_INTERNO", "etapa=[" + cEtapa + "] " + TxtErro(oErrCap))
+         lRespondido := .T.
+      EndIf
+   End Sequence
+
+   ErrorBlock(bErrOld)
+   If !lRespondido
+      jRet := BuildErro(500, "ERRO_INTERNO", "Erro inesperado.")
+   EndIf
+Return jRet
+
+/*/{Protheus.doc} getVsLogHistorico
+Historico da logistica de um pedido (ZLH), mais novo primeiro.
+@type function
+@author Romulo Garcia
+@since 19/11/2026
+@queryparam pedido, Character, numero do pedido (C5_NUM; zeros a esquerda completados)
+/*/
+@Get("/api/v1/vs-financial-data/logistica/historico")
+User Function getVsLogHistorico() as Logical
+Return LerHistorico()
+
+Static Function LerHistorico()
+   Local jQuery      := Nil
+   Local jResp       := JsonObject():New()
+   Local jRet        := Nil
+   Local jH          := Nil
+   Local aLin        := {}
+   Local bErrOld     := ErrorBlock({|oE| Break(oE) })
+   Local oErrCap     := Nil
+   Local cEtapa      := "00-inicio"
+   Local lRespondido := .F.
+   Local cPedido     := ""
+   Local cQuery      := ""
+   Local cAl         := ""
+   Local oStmt       := Nil
+   Local nTam        := 0
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      cEtapa := "01-parametros"
+      jQuery := oRest:getQueryRequest()
+      If ValType(jQuery) != "J" .and. ValType(jQuery) != "O"
+         jQuery := JsonObject():New()
+      EndIf
+      cPedido := Upper(AllTrim(SStr(jQuery["pedido"])))
+      nTam := TamSX3("C5_NUM")[1]
+      If !Empty(cPedido) .and. Len(cPedido) < nTam .and. SoDigitos(cPedido)
+         cPedido := PadL(cPedido, nTam, "0")
+      EndIf
+      If Empty(cPedido) .or. Len(cPedido) > nTam
+         jRet := BuildErro(400, "PEDIDO_INVALIDO", "Informe o pedido (pedido=NNNNNN).")
+         lRespondido := .T.
+         Break
+      EndIf
+
+      jResp["versao"] := LG_VERSAO
+      jResp["pedido"] := cPedido
+      jResp["temHistorico"] := TemTab("ZLH")
+      If jResp["temHistorico"]
+         cEtapa := "02-query"
+         cQuery := "SELECT ZLH_DATA, ZLH_HORA, ZLH_ITEM, ZLH_ACAO, ZLH_ORIGEM, ZLH_CAMPO, ZLH_TITULO, "
+         cQuery += "       ZLH_VALANT, ZLH_VALNOV, ZLH_CODUSR, ZLH_USUARI "
+         cQuery += "FROM " + RetSqlName("ZLH") + " "
+         cQuery += "WHERE ZLH_FILIAL = ? AND ZLH_PEDIDO = ? AND D_E_L_E_T_ = ' ' "
+         cQuery += "ORDER BY ZLH_DATA DESC, ZLH_HORA DESC, R_E_C_N_O_ DESC "
+         oStmt := FWExecStatement():New(cQuery)
+         oStmt:SetString(1, FWxFilial("ZLH"))
+         oStmt:SetString(2, PadR(cPedido, TamSX3("ZLH_PEDIDO")[1]))
+         cAl := oStmt:OpenAlias(GetNextAlias())
+         If !Empty(cAl) .and. Select(cAl) > 0
+            Do While !(cAl)->(Eof())
+               jH := JsonObject():New()
+               jH["data"]    := IsoOut((cAl)->ZLH_DATA)
+               jH["hora"]    := AllTrim(SStr((cAl)->ZLH_HORA))
+               jH["item"]    := AllTrim(SStr((cAl)->ZLH_ITEM))
+               jH["acao"]    := AllTrim(SStr((cAl)->ZLH_ACAO))
+               jH["origem"]  := AllTrim(SStr((cAl)->ZLH_ORIGEM))
+               jH["campo"]   := AllTrim(SStr((cAl)->ZLH_CAMPO))
+               jH["titulo"]  := TxtOut((cAl)->ZLH_TITULO)
+               jH["de"]      := TxtOut((cAl)->ZLH_VALANT)
+               jH["para"]    := TxtOut((cAl)->ZLH_VALNOV)
+               jH["codUsuario"] := AllTrim(SStr((cAl)->ZLH_CODUSR))
+               jH["usuario"] := TxtOut((cAl)->ZLH_USUARI)
+               aAdd(aLin, jH)
+               (cAl)->(DbSkip())
+            EndDo
+            (cAl)->(DbCloseArea())
+         EndIf
+         oStmt:Destroy()
+      EndIf
+      jResp["historico"] := aLin
+      jRet := oRest:setStatusResponse(200, jResp:ToJson())
+      lRespondido := .T.
+
+   Recover Using oErrCap
+      If !Empty(cAl) .and. Select(cAl) > 0
+         (cAl)->(DbCloseArea())
+      EndIf
+      oRest:setKeyHeaderResponse("X-Erro-Etapa", cEtapa)
+      If !lRespondido
+         jRet := BuildErro(500, "ERRO_INTERNO", "etapa=[" + cEtapa + "] " + TxtErro(oErrCap))
+         lRespondido := .T.
+      EndIf
+   End Sequence
+
+   ErrorBlock(bErrOld)
+   If !lRespondido
+      jRet := BuildErro(500, "ERRO_INTERNO", "Erro inesperado.")
+   EndIf
+Return jRet
+
+// Tabela fisica com todas as colunas que a API usa, no schema da conexao
+// (homologacao e producao no mesmo Oracle: sempre com LG_OWNER). Tabela ou
+// coluna que nao existe derrubaria a thread do REST sem passar pelo Recover.
+Static Function TemTab(cAlias)
+   Local aCols  := {}
+   Local cIn    := ""
+   Local cAl    := ""
+   Local oStmt  := Nil
+   Local nCols  := 0
+   Local nI     := 0
+   Local cNome  := ""
+   Local bErrAn := ErrorBlock({|oE| Break(oE) })
+
+   If cAlias == "ZLC"
+      aCols := {"ZLC_FILIAL", "ZLC_PEDIDO", "ZLC_ITEM", "ZLC_TIPO", "ZLC_CTE", "ZLC_DATA", "ZLC_TRANSP", ;
+         "ZLC_VALOR", "ZLC_SITUA", "ZLC_VLRESP", "ZLC_OBS", "ZLC_CODUSR", "ZLC_USUARI", "ZLC_DTALT", "ZLC_HRALT", "D_E_L_E_T_"}
+   Else
+      aCols := {"ZLH_FILIAL", "ZLH_PEDIDO", "ZLH_ITEM", "ZLH_DATA", "ZLH_HORA", "ZLH_ACAO", "ZLH_ORIGEM", ;
+         "ZLH_CAMPO", "ZLH_TITULO", "ZLH_VALANT", "ZLH_VALNOV", "ZLH_CODUSR", "ZLH_USUARI", "D_E_L_E_T_"}
+   EndIf
+   For nI := 1 to Len(aCols)
+      cIn += IIf(nI > 1, ",", "") + "'" + aCols[nI] + "'"
+   Next nI
+   Begin Sequence
+      // sem o SX2 do alias, o RetSqlName/FWxFilial nao servem
+      DbSelectArea("SX2")
+      SX2->(DbSetOrder(1))
+      If !SX2->(DbSeek(cAlias))
+         Break
+      EndIf
+      cNome := AllTrim(RetSqlName(cAlias))
+      oStmt := FWExecStatement():New("SELECT COUNT(*) AS QTD FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + ;
+         " AND TABLE_NAME = ? AND COLUMN_NAME IN (" + cIn + ")")
+      oStmt:SetString(1, cNome)
+      cAl := oStmt:OpenAlias(GetNextAlias())
+      If !Empty(cAl) .and. Select(cAl) > 0
+         nCols := NNum((cAl)->QTD)
+         (cAl)->(DbCloseArea())
+      EndIf
+      oStmt:Destroy()
+   End Sequence
+   ErrorBlock(bErrAn)
+Return nCols == Len(aCols)
+
+// "custos" de cada pedido: lista da ZLC (lotes de 900 pedidos, limite do IN)
+Static Function CustosPedidos(aPed)
+   Local jCus   := JsonObject():New()
+   Local aLote  := {}
+   Local aVazio := {}
+   Local nI     := 0
+
+   If Len(aPed) == 0 .or. !TemTab("ZLC")
+      Return Nil
+   EndIf
+   For nI := 1 to Len(aPed)
+      aAdd(aLote, aPed[nI]["pedido"])
+      If Len(aLote) == 900 .or. nI == Len(aPed)
+         CustoLote(aLote, jCus)
+         aLote := {}
+      EndIf
+   Next nI
+   For nI := 1 to Len(aPed)
+      If ValType(jCus[aPed[nI]["pedido"]]) == "A"
+         aPed[nI]["custos"] := jCus[aPed[nI]["pedido"]]
+      Else
+         aVazio := {}
+         aPed[nI]["custos"] := aVazio
+      EndIf
+   Next nI
+Return Nil
+
+Static Function CustoLote(aNums, jCus)
+   Local cQuery := ""
+   Local cAl    := ""
+   Local oStmt  := Nil
+   Local cIn    := ""
+   Local cKey   := ""
+   Local aLst   := {}
+   Local jC     := Nil
+   Local nI     := 0
+
+   For nI := 1 to Len(aNums)
+      cIn += IIf(nI > 1, ",", "") + "?"
+   Next nI
+   cQuery := "SELECT ZLC.ZLC_PEDIDO, ZLC.ZLC_ITEM, ZLC.ZLC_TIPO, ZLC.ZLC_CTE, ZLC.ZLC_DATA, ZLC.ZLC_TRANSP, "
+   cQuery += "       ZLC.ZLC_VALOR, ZLC.ZLC_SITUA, ZLC.ZLC_VLRESP, ZLC.ZLC_OBS, ZLC.ZLC_USUARI, "
+   cQuery += "       ZLC.ZLC_DTALT, ZLC.ZLC_HRALT, SA4.A4_NOME AS TRANSPNOME "
+   cQuery += "FROM " + RetSqlName("ZLC") + " ZLC "
+   cQuery += "LEFT JOIN " + RetSqlName("SA4") + " SA4 ON (SA4.A4_FILIAL = '" + FWxFilial("SA4") + "' OR SA4.A4_FILIAL = ' ') "
+   cQuery += "    AND SA4.A4_COD = ZLC.ZLC_TRANSP AND ZLC.ZLC_TRANSP <> ' ' AND SA4.D_E_L_E_T_ = ' ' "
+   cQuery += "WHERE ZLC.ZLC_FILIAL = ? AND RTRIM(ZLC.ZLC_PEDIDO) IN (" + cIn + ") AND ZLC.D_E_L_E_T_ = ' ' "
+   cQuery += "ORDER BY ZLC.ZLC_PEDIDO, ZLC.ZLC_ITEM "
+
+   oStmt := FWExecStatement():New(cQuery)
+   oStmt:SetString(1, FWxFilial("ZLC"))
+   For nI := 1 to Len(aNums)
+      oStmt:SetString(nI + 1, aNums[nI])
+   Next nI
+   cAl := oStmt:OpenAlias(GetNextAlias())
+   If !Empty(cAl) .and. Select(cAl) > 0
+      Do While !(cAl)->(Eof())
+         cKey := AllTrim((cAl)->ZLC_PEDIDO)
+         jC := JsonObject():New()
+         jC["item"]           := AllTrim(SStr((cAl)->ZLC_ITEM))
+         jC["tipo"]           := AllTrim(SStr((cAl)->ZLC_TIPO))
+         jC["cte"]            := TxtOut((cAl)->ZLC_CTE)
+         jC["data"]           := IsoOut((cAl)->ZLC_DATA)
+         jC["transportadora"] := AllTrim(SStr((cAl)->ZLC_TRANSP))
+         jC["transportadoraNome"] := TxtOut((cAl)->TRANSPNOME)
+         jC["valor"]          := Round(NNum((cAl)->ZLC_VALOR), 2)
+         jC["situacao"]       := AllTrim(SStr((cAl)->ZLC_SITUA))
+         jC["valorEsperado"]  := Round(NNum((cAl)->ZLC_VLRESP), 2)
+         jC["obs"]            := TxtOut((cAl)->ZLC_OBS)
+         jC["usuario"]        := TxtOut((cAl)->ZLC_USUARI)
+         jC["alteradoEm"]     := AllTrim(IsoOut((cAl)->ZLC_DTALT) + " " + AllTrim(SStr((cAl)->ZLC_HRALT)))
+         // o array do JsonObject pode vir copiado: monta e grava de volta
+         aLst := IIf(ValType(jCus[cKey]) == "A", jCus[cKey], {})
+         aAdd(aLst, jC)
+         jCus[cKey] := aLst
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return Nil
+
+// CTE/valor de envio (E) e reentrega (R) vindos pelo PUT (importacao): grava
+// na 1a cobranca do tipo; sem cobranca do tipo, cria uma (se tiver CTE ou valor)
+Static Function CustoDoPedido(cPedido, aCusto, dEnv, dNova, cTransp, aHist)
+   Local aTipos := {{"E", "C5_ZCTE", "C5_ZVLRCTE"}, {"R", "C5_ZCTEREE", "C5_ZVCTERE"}}
+   Local nT     := 0
+   Local nC     := 0
+   Local nV     := 0
+   Local cItem  := ""
+   Local cCte   := ""
+   Local nVal   := 0
+   Local cHA    := ""
+   Local cHN    := ""
+
+   DbSelectArea("ZLC")
+   For nT := 1 to Len(aTipos)
+      nC := aScan(aCusto, {|x| x[1] == aTipos[nT][2]})
+      nV := aScan(aCusto, {|x| x[1] == aTipos[nT][3]})
+      If nC == 0 .and. nV == 0
+         Loop
+      EndIf
+      cCte := IIf(nC > 0, AllTrim(SStr(aCusto[nC][2])), "")
+      nVal := IIf(nV > 0, Round(NNum(aCusto[nV][2]), 2), 0)
+      If !PosicionaTipo(cPedido, aTipos[nT][1])
+         If Empty(cCte) .and. nVal == 0
+            Loop
+         EndIf
+         cItem := ProxItem(cPedido)
+         RecLock("ZLC", .T.)
+         ZLC->ZLC_FILIAL := FWxFilial("ZLC")
+         ZLC->ZLC_PEDIDO := cPedido
+         ZLC->ZLC_ITEM   := cItem
+         ZLC->ZLC_TIPO   := aTipos[nT][1]
+         ZLC->ZLC_CTE    := cCte
+         ZLC->ZLC_VALOR  := nVal
+         ZLC->ZLC_DATA   := IIf(aTipos[nT][1] == "E", dEnv, dNova)
+         ZLC->ZLC_TRANSP := cTransp
+         Carimbo()
+         aAdd(aHist, {cItem, "I", "ZLC", "Cobranca incluida", "", ResumoCusto()})
+         ZLC->(MsUnlock())
+      Else
+         cItem := ZLC->ZLC_ITEM
+         RecLock("ZLC", .F.)
+         If nC > 0
+            cHA := HistTxt(ZLC->ZLC_CTE, "ZLC_CTE")
+            cHN := HistTxt(cCte, "ZLC_CTE")
+            If !(cHA == cHN)
+               aAdd(aHist, {cItem, "A", "ZLC_CTE", TituloCampo("ZLC_CTE"), cHA, cHN})
+               ZLC->ZLC_CTE := cCte
+            EndIf
+         EndIf
+         If nV > 0
+            cHA := HistTxt(ZLC->ZLC_VALOR, "ZLC_VALOR")
+            cHN := HistTxt(nVal, "ZLC_VALOR")
+            If !(cHA == cHN)
+               aAdd(aHist, {cItem, "A", "ZLC_VALOR", TituloCampo("ZLC_VALOR"), cHA, cHN})
+               ZLC->ZLC_VALOR := nVal
+            EndIf
+         EndIf
+         Carimbo()
+         ZLC->(MsUnlock())
+      EndIf
+   Next nT
+Return Nil
+
+// Posiciona a ZLC na 1a cobranca (nao excluida) do tipo no pedido
+Static Function PosicionaTipo(cPedido, cTipo)
+   Local cChave := FWxFilial("ZLC") + PadR(cPedido, TamSX3("ZLC_PEDIDO")[1])
+   ZLC->(DbSetOrder(1))
+   ZLC->(DbSeek(cChave))
+   Do While !ZLC->(Eof()) .and. ZLC->(ZLC_FILIAL + ZLC_PEDIDO) == cChave
+      If ZLC->ZLC_TIPO == cTipo
+         Return .T.
+      EndIf
+      ZLC->(DbSkip())
+   EndDo
+Return .F.
+
+// Proximo ZLC_ITEM do pedido, contando os excluidos (o numero nunca se repete)
+Static Function ProxItem(cPedido)
+   Local cAl   := ""
+   Local oStmt := Nil
+   Local cUlt  := ""
+   oStmt := FWExecStatement():New("SELECT MAX(ZLC_ITEM) AS ULT FROM " + RetSqlName("ZLC") + " WHERE ZLC_FILIAL = ? AND ZLC_PEDIDO = ?")
+   oStmt:SetString(1, FWxFilial("ZLC"))
+   oStmt:SetString(2, PadR(cPedido, TamSX3("ZLC_PEDIDO")[1]))
+   cAl := oStmt:OpenAlias(GetNextAlias())
+   If !Empty(cAl) .and. Select(cAl) > 0
+      cUlt := AllTrim(SStr((cAl)->ULT))
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return IIf(Empty(cUlt), StrZero(1, TamSX3("ZLC_ITEM")[1]), Soma1(cUlt))
+
+// Quem e quando alterou a cobranca (ZLC posicionada e travada)
+Static Function Carimbo()
+   Local aU := UsrInfo()
+   ZLC->ZLC_CODUSR := aU[1]
+   ZLC->ZLC_USUARI := aU[2]
+   ZLC->ZLC_DTALT  := Date()
+   ZLC->ZLC_HRALT  := Time()
+Return Nil
+
+// "Envio - CTE 123 - R$ 850,00 - Divergente" da ZLC posicionada
+Static Function ResumoCusto()
+   Local cR := HistTxt(ZLC->ZLC_TIPO, "ZLC_TIPO")
+   If !Empty(ZLC->ZLC_CTE)
+      cR += " - CTE " + AllTrim(ZLC->ZLC_CTE)
+   EndIf
+   cR += " - R$ " + AllTrim(Transform(ZLC->ZLC_VALOR, "@E 999,999,999.99"))
+   If !Empty(ZLC->ZLC_SITUA)
+      cR += " - " + HistTxt(ZLC->ZLC_SITUA, "ZLC_SITUA")
+   EndIf
+Return cR
+
+// Valor em texto para o historico (CP1252, como no banco)
+Static Function HistTxt(xV, cCampo)
+   Local cRet := ""
+   Local cDes := ""
+   Do Case
+   Case ValType(xV) == "D"
+      If !Empty(xV)
+         cRet := StrZero(Day(xV), 2) + "/" + StrZero(Month(xV), 2) + "/" + StrZero(Year(xV), 4)
+      EndIf
+   Case ValType(xV) == "N"
+      If xV != 0
+         If ("|" + AllTrim(cCampo) + "|") $ "|C5_ZVLRCTE|C5_ZVCTERE|ZLC_VALOR|ZLC_VLRESP|C5_FRETE|"
+            cRet := AllTrim(Transform(xV, "@E 999,999,999.99"))
+         Else
+            cRet := StrTran(cValToChar(xV), ".", ",")
+         EndIf
+      EndIf
+   Case ValType(xV) $ "CM"
+      cRet := AllTrim(StrTran(StrTran(xV, Chr(13), " "), Chr(10), " "))
+      If !Empty(cRet)
+         cDes := ComboDesc(cCampo, cRet)
+         If !Empty(cDes)
+            cRet := cRet + " - " + cDes
+         EndIf
+      EndIf
+   EndCase
+Return Left(cRet, 250)
+
+// Descricao do codigo no X3_CBOX, sem converter (vazio se o campo nao tem combo)
+Static Function ComboDesc(cCampo, cCod)
+   Local cBox := ""
+   Local aOpc := {}
+   Local nI   := 0
+   Local nPos := 0
+   cBox := AllTrim(SStr(GetSX3Cache(AllTrim(cCampo), "X3_CBOX")))
+   If Empty(cBox)
+      Return ""
+   EndIf
+   aOpc := StrTokArr(cBox, ";")
+   For nI := 1 to Len(aOpc)
+      nPos := At("=", aOpc[nI])
+      If nPos > 0 .and. AllTrim(SubStr(aOpc[nI], 1, nPos - 1)) == cCod
+         Return AllTrim(SubStr(aOpc[nI], nPos + 1))
+      EndIf
+   Next nI
+Return ""
+
+// Grava as linhas do historico. Erro aqui nao desfaz a gravacao principal (ja
+// feita): volta o texto do erro para a resposta avisar a tela.
+// aHist: {item, acao, campo, titulo, antes, depois}
+Static Function GravaHists(cPedido, aHist, cOrigem)
+   Local cErro  := ""
+   Local oErr   := Nil
+   Local aU     := UsrInfo()
+   Local nI     := 0
+   Local bErrAn := ErrorBlock({|oE| Break(oE) })
+   Begin Sequence
+      DbSelectArea("ZLH")
+      For nI := 1 to Len(aHist)
+         RecLock("ZLH", .T.)
+         ZLH->ZLH_FILIAL := FWxFilial("ZLH")
+         ZLH->ZLH_PEDIDO := cPedido
+         ZLH->ZLH_ITEM   := aHist[nI][1]
+         ZLH->ZLH_DATA   := Date()
+         ZLH->ZLH_HORA   := Time()
+         ZLH->ZLH_ACAO   := aHist[nI][2]
+         ZLH->ZLH_ORIGEM := cOrigem
+         ZLH->ZLH_CAMPO  := aHist[nI][3]
+         ZLH->ZLH_TITULO := Left(aHist[nI][4], TamSX3("ZLH_TITULO")[1])
+         ZLH->ZLH_VALANT := Left(aHist[nI][5], TamSX3("ZLH_VALANT")[1])
+         ZLH->ZLH_VALNOV := Left(aHist[nI][6], TamSX3("ZLH_VALNOV")[1])
+         ZLH->ZLH_CODUSR := aU[1]
+         ZLH->ZLH_USUARI := aU[2]
+         ZLH->(MsUnlock())
+      Next nI
+   Recover Using oErr
+      cErro := "Gravado, mas o historico falhou: " + TxtErro(oErr)
+   End Sequence
+   ErrorBlock(bErrAn)
+Return cErro
+
+// {codigo, nome} do usuario da sessao (token da tela)
+Static Function UsrInfo()
+   Local aU     := {"", "?"}
+   Local bErrAn := ErrorBlock({|oE| Break(oE) })
+   Begin Sequence
+      aU[1] := AllTrim(RetCodUsr())
+      aU[2] := Left(AllTrim(UsrRetName(aU[1])), 25)
+   End Sequence
+   ErrorBlock(bErrAn)
+Return aU
+
+// Valor de um campo em aVal ({campo, valor}) ou o padrao
+Static Function ValorDe(aVal, cCampo, xPadrao)
+   Local nP := aScan(aVal, {|x| x[1] == cCampo})
+Return IIf(nP > 0, aVal[nP][2], xPadrao)
+
 
 // ----------------------------------------------------------------------------
 // Helpers
