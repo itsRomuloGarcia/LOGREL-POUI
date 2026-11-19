@@ -54,6 +54,8 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 
 **Documento explicativo** (para gestão e logística, imagens com dados fictícios): Claude Docs https://claude.ai/artifact/KdzWZkxgyB1P2AEbh2tXNz e PDF em `..\Comunicados\2026-11-logistica\Logistica - tela no Protheus.pdf`, gerado do `documento.html` da mesma pasta (padrão do comunicado RX Pedidos; Chrome headless, A4, escala 0,8).
 
+**Comunicado de apresentação da tela** (19/11/2026, e-mail no padrão do RX Pedidos, prints com dados fictícios): `..\Comunicados6-11-logistica-apresentacao\` (`email.html`, `email-gmail.html` com as imagens dentro, `email.txt`, PDF). Abre com o texto do usuário ("exterminar" a dependência de planilhas), explica SC5 + ZLC + ZLH, a planilha já no Protheus com Importação/Carga inicial no histórico, a tela aba por aba, a API para outras ferramentas (CRM dos vendedores) e o próximo passo: APIs das transportadoras (rastreio e cotação). Para refazer: `_gerador/` (API falsa `mock2.cjs`, roteiro de prints e `gerar_log.py`).
+
 ## Rotas
 - `GET /api/v1/vs-financial-data/logistica/pedidos?de=AAAAMMDD&ate=AAAAMMDD` (padrão 365 dias, máximo 1100). A tela pede 01/01 do ano anterior até hoje.
 - `PUT /api/v1/vs-financial-data/logistica/pedidos/:recno` (R_E_C_N_O_ da SC5). Só os campos enviados; responde o pedido no formato do GET, sempre (busca pelo número, sem filtro).
