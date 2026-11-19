@@ -37,7 +37,7 @@ Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compa
 Detalhes em [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh).
 
 **2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
-1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-19a`).
+1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-19b`).
 2. Compile `LOGRELAPP/LOGRELAPP.PRW`.
 3. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
 
@@ -128,7 +128,7 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 
 - **Pedidos considerados** (itens não eliminados por resíduo):
   - **sem NF:** todos, de qualquer TES, tipo e emissão (os Previstos são todos os pedidos não faturados);
-  - **com NF:** emissão no período da tela e itens com TES de saída que movimenta estoque (`F4_TIPO = 'S'` e `F4_ESTOQUE = 'S'`) em `C5_TIPO = 'N'`, ou pedido com data de envio, de qualquer TES ou tipo;
+  - **com NF:** emissão no período da tela e itens com TES de saída que movimenta estoque (`F4_TIPO = 'S'` e `F4_ESTOQUE = 'S'`) em `C5_TIPO = 'N'`, ou item com a **TES 610** (remessa para conserto, usada no início da operação; desde 19/11/2026), ou pedido com data de envio, de qualquer TES ou tipo;
   - **nunca:** itens de remessa por conta e ordem (CFOP 5923/6923). O transporte sai em outro pedido.
 - **Cliente e grupo:** cliente, loja e grupo (descrição do `A1_GRPVEN`) vêm do cliente do pedido. Cidade e UF vêm do cliente de **entrega**.
 - **Etapa do pedido:**

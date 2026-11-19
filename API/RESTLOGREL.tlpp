@@ -13,6 +13,8 @@
 //      SAIDA que MOVIMENTA estoque (F4_TIPO = 'S' e F4_ESTOQUE = 'S') em pedido
 //      normal (C5_TIPO = 'N'), OU pedido com data de envio (C5_ZDTENV), de
 //      qualquer TES/tipo: o que a logistica registrou aparece (2026-11-13c).
+//   TES 610 (remessa para conserto, inicio da operacao) entra como se
+//   movimentasse estoque (2026-11-19b, pedido do usuario; LG_TES_INCLUI).
 //   Fora sempre: item de REMESSA POR CONTA E ORDEM (CFOP x923 no C6_CF: 5923,
 //   6923). E so o documento fiscal; o transporte sai em outro pedido, que e o
 //   que a logistica acompanha (pedido do usuario, 13/11/2026, 2026-11-13d).
@@ -104,7 +106,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-19a"
+#define LG_VERSAO     "2026-11-19b"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -113,6 +115,9 @@ Namespace Videosoft.Logistica.Pedidos
 #define LG_DIAS_PADR  365
 #define LG_DIAS_MAX   1100
 #define LG_BUSCA_MAX  500
+// TES que entram na tela mesmo sem movimentar estoque (2026-11-19b, pedido do
+// usuario): 610 = remessa para conserto/reparo, usada no inicio da operacao
+#define LG_TES_INCLUI "'610'"
 
 /*/{Protheus.doc} getVsLogPedidos
 Pedidos de entrega: todos os sem nota + os com nota (TES de saida com estoque) do periodo.
@@ -920,6 +925,7 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
       aAdd(aBinds, DToS(dDe))
       aAdd(aBinds, DToS(dAte))
       cQuery += "          AND ( ( SC5.C5_TIPO = 'N' AND SF4.F4_TIPO = 'S' AND SF4.F4_ESTOQUE = 'S' ) "
+      cQuery += "                OR SC6.C6_TES IN (" + LG_TES_INCLUI + ") "
       If "|C5_ZDTENV|" $ cExist
          cQuery += "                OR SC5.C5_ZDTENV <> ' ' "
       EndIf
