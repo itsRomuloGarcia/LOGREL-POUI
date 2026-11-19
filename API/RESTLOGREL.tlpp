@@ -44,6 +44,8 @@
 //     na coluna Retornados. Opcionais como os outros Z (ALL_TAB_COLUMNS).
 //   - "opcoes": combos do SX3 (X3_CBOX) de C5_ZTPMAT, C5_ZINDICA, C5_ZREENTR,
 //     C5_ZTPPEDI e C5_ZMOTRET, para a tela nao depender de lista fixa.
+//   - "telefone" (cliente de entrega) e "telefoneCliente" (cliente do pedido):
+//     A1_DDD + A1_TEL (A2_* na devolucao/beneficiamento), 2026-11-19c.
 //   - "transportadoras": SA4 inteira (codigo e nome), para a edicao.
 //   - Numeros de serie (2026-11-16a, pedido do usuario, igual ao RX Pedidos):
 //     cada item ganha "numerosSerie" = [[serie, nf], ...] da Z01 (Z01_PEDIDO,
@@ -106,7 +108,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-19b"
+#define LG_VERSAO     "2026-11-19c"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -857,6 +859,11 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_NOME ELSE SAE.A1_NOME END AS NOMEENT, "
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_MUN ELSE SAE.A1_MUN END AS CIDADE, "
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_EST ELSE SAE.A1_EST END AS UF, "
+   // telefone (2026-11-19c, pedido do usuario): do cliente de entrega e do cliente do pedido
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_DDD ELSE SAE.A1_DDD END AS DDDENT, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_TEL ELSE SAE.A1_TEL END AS TELENT, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_DDD ELSE SA1.A1_DDD END AS DDDCLI, "
+   cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_TEL ELSE SA1.A1_TEL END AS TELCLI, "
    cQuery += "       SA3.A3_NOME AS VENDEDOR, SA4.A4_NOME AS TRANSP, "
    cQuery += "       " + ColOpc(cExist, "C5_ZTPPEDI", "TIPOPED", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZFRETE", "ZFRETE", @aFalta) + ", "
@@ -975,6 +982,8 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["nomeEntrega"]       := TxtOut((cAlias)->NOMEENT)
          jPed["cidade"]            := TxtOut((cAlias)->CIDADE)
          jPed["uf"]                := AllTrim(SStr((cAlias)->UF))
+         jPed["telefone"]          := Fone((cAlias)->DDDENT, (cAlias)->TELENT)
+         jPed["telefoneCliente"]   := Fone((cAlias)->DDDCLI, (cAlias)->TELCLI)
          jPed["vendedor"]          := TxtOut((cAlias)->VENDEDOR)
          jPed["codVendedor"]       := AllTrim(SStr((cAlias)->CODVEND))
          jPed["tipoPedido"]        := AllTrim(SStr((cAlias)->TIPOPED))
@@ -1144,6 +1153,18 @@ Static Function FechaPedido(jPed, aItens, aNotas, cDtFat)
    jPed["notas"]       := aNotas
    jPed["dataFaturamento"] := cDtFat
 Return
+
+// "(11) 3333-4444" do DDD e do telefone do cadastro (sem DDD repetido)
+Static Function Fone(xDdd, xTel)
+   Local cDdd := AllTrim(SStr(xDdd))
+   Local cTel := AllTrim(SStr(xTel))
+   If Empty(cTel)
+      Return ""
+   EndIf
+   If !Empty(cDdd) .and. !(Left(cTel, 1) == "(") .and. !(Left(cTel, Len(cDdd)) == cDdd)
+      cTel := "(" + cDdd + ") " + cTel
+   EndIf
+Return TxtOut(cTel)
 
 // "SC5.C5_X AS APELIDO" se o campo existe; senao "' ' AS APELIDO" e anota em aFalta
 Static Function ColOpc(cExist, cCampo, cApelido, aFalta)

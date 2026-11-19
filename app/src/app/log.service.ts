@@ -94,6 +94,9 @@ export interface Pedido {
   nomeEntrega: string;
   cidade: string;
   uf: string;
+  /** Telefone do cliente de entrega e do cliente do pedido (A1_DDD + A1_TEL); API >= 2026-11-19c */
+  telefone?: string;
+  telefoneCliente?: string;
   vendedor: string;
   codVendedor: string;
   tipoPedido: string;

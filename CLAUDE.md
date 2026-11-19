@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`), versão `LG_VERSAO` = `2026-11-19b` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`), versão `LG_VERSAO` = `2026-11-19c` | sim |
 | Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
@@ -206,7 +206,10 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - 93 no Protheus com NF e fora da planilha (até agosto): 89 faturados sem envio (TES 502: 31, 694: 22, 611: 15, 607: 8, 531: 5…), 2 enviados (000287, 003431), 2 entregues (000017, 000144).
   - **Pedido do usuário:** "a TES 610 foi utilizada no início da operação… considere ela" → API `2026-11-19b`: `LG_TES_INCLUI` (`'610'`) entra no filtro dos pedidos com NF como se movimentasse estoque (`OR SC6.C6_TES IN (...)`, sem exigir `C5_TIPO = 'N'`).
 
+- **19/11/2026 (4ª), pedido do usuário: telefone do cliente** (API `2026-11-19c` + tela): `telefone` (cliente de **entrega**, `C5_CLIENT/C5_LOJAENT`) e `telefoneCliente` (cliente do pedido), `A1_DDD` + `A1_TEL` (`A2_*` na devolução/beneficiamento), montados por `Fone` como "(DDD) número". Tela: só em **Cliente e pedido** da gaveta (o usuário pediu para **não** pôr no topo), com link `tel:`; os dois quando são cadastros diferentes; "não cadastrado" sem telefone. Também na busca, na coluna "Telefone (entrega)" da Lista e no XLSX (aba Pedidos, os dois). Testado com API falsa e Chrome headless.
+
 ## Pendências
+- **19/11/2026 (4ª):** compilar `RESTLOGREL.tlpp` `2026-11-19c` (inclui a 19b, TES 610) e o `logrel.app` de 19/11 (telefone; inclui custos visíveis e Exportar XLSX).
 - **19/11/2026 (3ª):** compilar o `RESTLOGREL.tlpp` `2026-11-19b` (TES 610) na homologação; conferir 000039 e 000432 na tela. Rodar a comparação da planilha com a produção (só leitura) quando houver permissão.
 - **19/11/2026 (2ª):** compilar o `logrel.app` novo (custos visíveis + Exportar XLSX) e conferir o download do .xlsx dentro do Protheus.
 - **19/11/2026, custos de frete e histórico:** **tabelas criadas e fontes compilados na homologação pelo usuário em 19/11.** **Carga conferida em 19/11 pela API da homologação (só leitura):** GET `2026-11-19a` em 3 s, `temCustos`/`temHistorico` verdadeiros, combos do SX3 certos; 2.838 pedidos no GET, 2.491 com cobrança, 2.571 cobranças (2.491 Envio + 80 Reentrega), R$ 1.118.408,44 na SC5 = R$ 1.118.408,44 na ZLC, nenhum pedido com CTE ou valor diferente entre SC5 e ZLC, nenhum item repetido, histórico origem 3 gravado com o usuário. 102 pedidos enviados sem CTE nenhum (4 de novembro) mostram o aviso "Falta lançar o CTE do envio". Ainda não havia nada lançado pela tela. Ainda conferir: CTE antigo virou cobrança de Envio; incluir/editar/excluir cobrança; histórico com o nome do usuário (não testado se `UsrRetName` funciona na thread do REST com o token da tela; no RESTPCPREL funciona); combo da situação no histórico. Na produção, depois dos campos `C5_Z*`, mesma ordem.

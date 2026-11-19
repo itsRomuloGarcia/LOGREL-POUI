@@ -495,7 +495,7 @@ export class Painel {
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, p.telefone, p.telefoneCliente, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
       ),
     };
   }
@@ -526,6 +526,12 @@ export class Painel {
     if (!cod) return k === 'situacaoCusto' ? 'OK' : '';
     const o = this.opCusto(k).find((x) => x[0] === cod);
     return o ? o[1] : cod;
+  }
+  /** Telefone com link para discar (o numero vai so com digitos) */
+  private foneHtml(t?: string): string {
+    if (!t) return '<span class="muted">não cadastrado</span>';
+    const d = t.replace(/\D/g, '');
+    return d.length >= 8 ? `<a href="tel:${d}">${esc(t)}</a>` : esc(t);
   }
   /** CTE para os cartoes: o 1o da lista */
   private cteTxt(r: Reg): string {
@@ -974,6 +980,7 @@ export class Painel {
       { k: 'nome', t: 'Nome', v: (r) => r.p.nome },
       { k: 'cid', t: 'Cidade (entrega)', v: (r) => r.p.cidade },
       { k: 'uf', t: 'UF', v: (r) => r.p.uf },
+      { k: 'tel', t: 'Telefone (entrega)', v: (r) => r.p.telefone || '', tit: 'A1_DDD + A1_TEL do cliente de entrega' },
       { k: 'grp', t: 'Grupo do cliente', v: (r) => r.p.grupo },
       { k: 'vend', t: 'Vendedor', v: (r) => r.p.vendedor },
       { k: 'tipo', t: 'Tipo do pedido', v: (r) => this.txtOp('tipoPedido', r.p.tipoPedido) },
@@ -1441,6 +1448,8 @@ export class Painel {
               <div><dt>Nome</dt><dd>${esc(p.nome)}</dd></div>
               <div><dt>Grupo do cliente</dt><dd>${esc(p.grupo || '–')}</dd></div>
               <div><dt>Entrega</dt><dd>${esc([p.cidade, p.uf].filter(Boolean).join(' / ') || '–')}${p.nomeEntrega && p.nomeEntrega !== p.nome ? `<br><span class="muted">${esc(p.clienteEntrega)} ${esc(p.nomeEntrega)}</span>` : ''}</dd></div>
+              <div><dt>Telefone${p.telefoneCliente && p.telefoneCliente !== p.telefone ? ' (entrega)' : ''}</dt><dd>${this.foneHtml(p.telefone)}</dd></div>
+              ${p.telefoneCliente && p.telefoneCliente !== p.telefone ? `<div><dt>Telefone (cliente do pedido)</dt><dd>${this.foneHtml(p.telefoneCliente)}</dd></div>` : ''}
               <div><dt>Vendedor</dt><dd>${esc(p.vendedor || p.codVendedor || '–')}</dd></div>
               <div><dt>Tipo do pedido</dt><dd>${esc(this.txtOp('tipoPedido', p.tipoPedido) || '–')}</dd></div>
               <div><dt>Notas fiscais</dt><dd>${esc((p.notas || []).join(', ') || '–')}</dd></div>
@@ -1551,6 +1560,8 @@ export class Painel {
         ['Grupo do cliente', 'txt', (r) => r.p.grupo],
         ['Cidade de entrega', 'txt', (r) => r.p.cidade],
         ['UF', 'txt', (r) => r.p.uf],
+        ['Telefone (entrega)', 'txt', (r) => r.p.telefone || ''],
+        ['Telefone (cliente do pedido)', 'txt', (r) => r.p.telefoneCliente || ''],
         ['Vendedor', 'txt', (r) => r.p.vendedor],
         ['Cód. transportadora', 'txt', (r) => r.p.transportadora],
         ['Transportadora', 'txt', (r) => r.p.transportadoraNome],

@@ -37,7 +37,7 @@ Detalhes em [Criar os campos na produção](#criar-os-campos-na-produção-compa
 Detalhes em [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh).
 
 **2. Compilar a tela** (veja [Publicar no Protheus](#publicar-no-protheus))
-1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-19b`).
+1. Compile `API/RESTLOGREL.tlpp` (versão `2026-11-19c`).
 2. Compile `LOGRELAPP/LOGRELAPP.PRW`.
 3. Compile `app/dist/producao/logrel.app`. Ele aponta para o REST da produção (porta 10407) e foi gerado do mesmo código da homologação. Se a tela mudar, gere de novo com `empacotar.ps1 -Ambiente producao`.
 
@@ -84,6 +84,8 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 - retorno: data, motivo e pedido do reenvio.
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
+
+Em "Cliente e pedido" fica o **telefone** do cadastro (cliente de entrega e, se for outro, o cliente do pedido), com link para discar.
 
 Dois blocos de frete e histórico:
 - **Custos de frete**, logo abaixo de "Envio e entrega" e sempre visível (pedido do usuário em 19/11/2026): a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
