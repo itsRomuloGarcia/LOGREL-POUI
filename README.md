@@ -7,6 +7,7 @@ Tela Angular + PO UI aberta dentro do Protheus por `U_LOGRELAPP` (`FwCallApp("lo
 | API | `API/RESTLOGREL.tlpp` (TLPP, versão `LG_VERSAO`) |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP`; também recebe da tela o pedido de impressão do DANFE) |
 | Tela | `app/`: Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4 |
+| Planilha | `planilha/Codigo.gs`: planilha Google que se atualiza sozinha a cada 15 minutos pela mesma API (molde do RX Pedidos) |
 | Acesso | pelo menu (`U_LOGRELAPP`); a API não tem trava própria desde 18/11/2026 |
 | Criada em | 13/11/2026, no molde do PCPREL (`PO-UI-Protheus-main`) |
 
@@ -165,6 +166,54 @@ Sem as tabelas ZLC e ZLH no ambiente, a API funciona como antes (CTE na SC5, sem
 | Pasta | Conteúdo |
 |---|---|
 | [`Comunicados/2026-11-apresentacao-logistica/`](Comunicados/2026-11-apresentacao-logistica/README.md) | Apresentação da tela (19/11/2026): e-mail pronto para o Gmail (`email-gmail.html`), HTML, texto, PDF, prints com dados fictícios e os scripts para refazer. Explica como foi feito (SC5, custos de frete, histórico), a planilha já no Protheus, a tela aba por aba, a leitura por API (CRM) e o próximo passo (APIs das transportadoras). |
+
+## Planilha Google (`planilha/Codigo.gs`)
+
+Uma planilha Google com os pedidos da logística, que se atualiza sozinha a cada 15 minutos. Ela funciona como a planilha do RX Pedidos (`RX-Pedidos/PCPREL/planilha/Codigo.gs`):
+- o Apps Script chama o mesmo `GET /logistica/pedidos` da tela;
+- não precisa compilar nada no Protheus.
+
+**Montar a planilha**
+1. Crie uma planilha Google e abra **Extensões → Apps Script**. Cole o conteúdo de `planilha/Codigo.gs` e salve.
+2. Em **Configurações do projeto**:
+   - confira o fuso horário: (GMT-03:00) São Paulo;
+   - em **Propriedades do script**, cadastre:
+
+   | Propriedade | Conteúdo |
+   |---|---|
+   | `PROTHEUS_URL` | Endereço do REST, terminando em `/rest` (produção: porta 10407) |
+   | `PROTHEUS_USUARIO` | Usuário do Protheus, de preferência só de leitura (o mesmo da planilha do RX) |
+   | `PROTHEUS_SENHA` | Senha desse usuário |
+   | `DIAS` | Opcional. Pedidos com NF emitidos nos últimos N dias. Vazio = 365, igual à tela; máximo 1100. Os sem NF vêm todos |
+
+3. Recarregue a planilha e use o menu **Logística → Ligar atualização automática**. Na primeira vez, o Google pede autorização.
+
+**Abas** (regravadas a cada carga, com as mesmas colunas e regras do **Exportar XLSX** da tela)
+
+| Aba | Conteúdo |
+|---|---|
+| Pedidos | Uma linha por pedido (45 colunas). A ordem é por quadro (Previsto, Faturado, Enviado, Entregue, Retornou) e, dentro do quadro, pelo número do pedido. Só as células de Quadro e Situação da entrega são pintadas |
+| Itens | Uma linha por item (produto, quantidade, TES, NF, números de série) |
+| Custos de frete | Uma linha por cobrança da ZLC (CTE, reentregas, taxas), com a diferença das divergentes. Só aparece com a ZLC no ambiente; sem ela, a aba Pedidos mostra o CTE da SC5 |
+| Resumo | Quatro tabelas: pontos de atenção (iguais aos cartões da tela), pedidos por quadro, transportadoras (enviados e entregues, % no prazo, frete cobrado × custo) e entregues por mês da entrega (últimos 12 meses) |
+| Atualizacao | As últimas 200 execuções: quando rodou, OK ou ERRO, o detalhe e o tempo. Se der erro, os dados anteriores continuam nas abas |
+
+**Cores**
+
+| Célula | Valor | Cor |
+|---|---|---|
+| Quadro | Previsto / Faturado / Enviado / Entregue / Retornou | amarelo claro 2 / laranja claro 1 / azul claro 1 / verde escuro 2 (fonte branca) / cinza |
+| Situação da entrega | No prazo / Vence em até 2 dias / Atrasado / Sem previsão | verde claro 3 / vermelho claro / vermelho escuro (fonte branca) / sem cor |
+
+**Menu Logística**
+- **Atualizar agora:** busca e regrava na hora.
+- **Ligar atualização automática:** cria o gatilho e já atualiza uma vez.
+- **Desligar atualização automática:** remove o gatilho.
+
+**Cuidados**
+- O REST do Protheus precisa ser acessível pela internet, porque o Apps Script roda nos servidores do Google.
+- Quem tiver o link vê os valores: itens, frete cobrado e custo de frete.
+- Se a tela mudar as regras de quadro, prazo ou frete (`montar` em `painel.ts`) ou as colunas do Exportar XLSX, mude também `montar_` e `colunasPedidos_` no `Codigo.gs`.
 
 ## Arquivos da tela (`app/src/app/`)
 

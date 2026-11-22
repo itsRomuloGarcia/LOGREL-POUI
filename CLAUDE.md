@@ -9,6 +9,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
 | Acesso | só o menu (`U_LOGRELAPP`). O `U_VSAPIACE` saiu da API em 18/11/2026 (`2026-11-18a`) | não |
+| Planilha | `planilha/Codigo.gs` (Apps Script colado na planilha Google; a versão viva é a do Apps Script) | não |
 
 Cada pasta de patch (`API/`, `LOGRELAPP/`, `app/dist/homologacao/`, `app/dist/producao/`) tem só o arquivo que vai para o RPO. Não criar outros arquivos nelas.
 
@@ -213,7 +214,20 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - **19/11/2026 (5ª), produção validada pela API (só leitura, a pedido do usuário):** `2026-11-19c`, `temCustos`/`temHistorico` verdadeiros, GET em 6 s com 4.076 pedidos. Carga inicial às 10:27 (3.344 pedidos com CTE na SC5, nenhuma diferença SC5 × ZLC) e importação da planilha pela tela às 10:36 (75 pedidos sem CTE na SC5 ganharam a cobrança direto na ZLC, origem 2). ZLC: 3.509 cobranças (3.419 Envio + 90 Reentrega), R$ 1.487.237,23. 1 cobrança sem data (001426, reentrega sem nova data). Histórico com o usuário certo (`romulo.garcia`) também nas linhas gravadas pela API. Detalhe cosmético: a cobrança criada pelo PUT tem o resumo "E - Envio - CTE…" (`ResumoCusto` usa o código do combo) e a da carga, "Envio - CTE…".
   - **Planilha de 19/11 × produção** (`Planilhas/LOGISTICA-conferencia-producao-2026-11-19.xlsx`): 3.621 dos 3.639 pedidos na tela, 3.533 iguais; 77 repetidos (entregas parciais, um envio só no pedido); 10 não importados por erro na planilha (000034 e 002129 envio antes da emissão; 001050 data "17/04/26/26"; 000230, 000569, 000681, 002128, 002812, 003568, 003569 entrega antes do envio); 1 diferente (000019). Fora da tela: 13 remessa por conta e ordem (TES 612, por regra), 2 inexistentes (001185, 003265) e 3 com envio que não entram (000710 TES 611, 001064 TES 502, 003973 TES 693: provável resíduo, não conferido). No Protheus com NF e fora da planilha: 206 faturados sem envio (63 de novembro).
 
+- **22/11/2026, pedido do usuário: planilha Google igual à do RX Pedidos**, conectada ao Protheus e atualizada a cada 15 min. Arquivo `planilha/Codigo.gs`.
+  - **Mesmo molde do `RX-Pedidos/PCPREL/planilha/Codigo.gs`:**
+    - propriedades `PROTHEUS_URL`/`PROTHEUS_USUARIO`/`PROTHEUS_SENHA`/`DIAS`;
+    - gatilho de 15 min;
+    - `LockService`;
+    - aba Atualizacao com 200 execuções;
+    - erro pelo `X-Erro`/`X-Erro-Etapa`.
+  - **Usa o `GET /logistica/pedidos` sem mudança de API** (acesso só por Basic Auth desde a `2026-11-18a`). `de` = hoje − `DIAS` (padrão 365, igual à tela).
+  - **Regras copiadas da tela:** `montar_` = `montar()` do `painel.ts`, com retorno antes de tudo, entrega final, prazo pela previsão, "vence" ≤ 2 dias, cobrado = `C5_FRETE` + `C5_ZFRETE` e custo pela ZLC ou CTE da SC5.
+  - **Abas:** Pedidos, Itens e Custos de frete têm as mesmas colunas do Exportar XLSX. Resumo traz pontos de atenção, quadros, transportadoras e entregues por mês. Cor só nas células Quadro e Situação da entrega, como no RX.
+  - **Testado** no Node com uma imitação do Apps Script e a API falsa do comunicado (`Comunicados/.../_gerador/mock2.cjs`, 97 pedidos fictícios), com e sem ZLC: sem erro, abas e cores conferidas. **Não testado no Google**; a planilha ainda não foi criada.
+
 ## Pendências
+- **22/11/2026:** criar a planilha Google, colar o `planilha/Codigo.gs`, cadastrar as propriedades (REST da produção 10407, usuário de leitura) e ligar a atualização automática. Conferir as contagens do Resumo com a tela.
 - **19/11/2026 (4ª):** compilar `RESTLOGREL.tlpp` `2026-11-19c` (inclui a 19b, TES 610) e o `logrel.app` de 19/11 (telefone; inclui custos visíveis e Exportar XLSX).
 - **19/11/2026 (3ª):** compilar o `RESTLOGREL.tlpp` `2026-11-19b` (TES 610) na homologação; conferir 000039 e 000432 na tela. Rodar a comparação da planilha com a produção (só leitura) quando houver permissão.
 - **19/11/2026 (2ª):** compilar o `logrel.app` novo (custos visíveis + Exportar XLSX) e conferir o download do .xlsx dentro do Protheus.
