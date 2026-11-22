@@ -235,7 +235,7 @@ const r2_ = (x) => Math.round((x || 0) * 100) / 100;
 // data, moeda, int, peso, gen (sem formato)
 function colunasPedidos_(ctx) {
   const cus = ctx.temCustos;
-  return [
+  const lista = [
     ["Pedido", "txt", (r) => r.p.pedido],
     ["Quadro", "gen", (r) => QUADROS[r.et].nome],
     ["Situação da entrega", "gen", (r) => PRAZOS[r.prazo].nome],
@@ -299,27 +299,46 @@ function colunasPedidos_(ctx) {
       ["Cobrado − custo", "moeda", (r) => (r.custo ? r2_(r.cobrado - r.custo) : "")],
       ["Observações da entrega", "gen", (r) => r.p.obsEntrega || ""],
     ]);
+  return primeiro_(lista, PRIMEIRAS_PEDIDOS);
+}
+
+// Aba Pedidos: estas colunas vem primeiro, nesta ordem (pedido do usuario em
+// 22/11/2026: as datas logo depois do Pedido); as demais seguem a ordem acima
+const PRIMEIRAS_PEDIDOS = ["Pedido", "Saída programada", "Envio", "Previsão de entrega", "Data de entrega"];
+// Celulas pintadas na aba Pedidos (achadas pelo titulo)
+const COL_QUADRO = "Quadro";
+const COL_PRAZO = "Situação da entrega";
+
+function primeiro_(col, titulos) {
+  const frente = titulos.map((t) => col.filter((c) => c[0] === t)[0]).filter(Boolean);
+  return frente.concat(col.filter((c) => titulos.indexOf(c[0]) < 0));
 }
 
 function gravarPedidos_(regs, ctx) {
   const col = colunasPedidos_(ctx);
   const linhas = regs.map((r) => col.map((c) => valorCelula_(c[1], c[2](r))));
-  const aba = gravarTabela_(ABA_PED, 0, col, linhas, 4);
-  // Cor so nas celulas Quadro (B) e Situacao da entrega (C)
+  const titulos = col.map((c) => c[0]);
+  const iQuadro = titulos.indexOf(COL_QUADRO) + 1;
+  const iPrazo = titulos.indexOf(COL_PRAZO) + 1;
+  const aba = gravarTabela_(ABA_PED, 0, col, linhas, [iQuadro, iPrazo]);
+  // Cor so nas celulas Quadro e Situacao da entrega
   const cont = {};
   if (regs.length) {
-    const fundos = [];
-    const fontes = [];
+    const pinta = (iCol, cor) => {
+      if (iCol < 1) return;
+      const cores = regs.map((r) => [cor(r)]);
+      aba
+        .getRange(2, iCol, regs.length, 1)
+        .setBackgrounds(cores)
+        .setFontColors(cores.map((c) => [corFonte_(c[0])]))
+        .setFontWeight("bold");
+    };
+    pinta(iQuadro, (r) => QUADROS[r.et].cor);
+    pinta(iPrazo, (r) => PRAZOS[r.prazo].cor);
     regs.forEach((r) => {
-      const cq = QUADROS[r.et].cor;
-      const cp = PRAZOS[r.prazo].cor;
-      fundos.push([cq, cp]);
-      fontes.push([corFonte_(cq), corFonte_(cp)]);
       const k = r.prazo ? QUADROS[r.et].nome + "/" + PRAZOS[r.prazo].nome : QUADROS[r.et].nome;
       cont[k] = (cont[k] || 0) + 1;
     });
-    const faixa = aba.getRange(2, 2, regs.length, 2);
-    faixa.setBackgrounds(fundos).setFontColors(fontes).setFontWeight("bold");
   }
   aba.setFrozenColumns(1);
   return cont;
@@ -344,7 +363,7 @@ function gravarItens_(regs) {
       linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
     }),
   );
-  gravarTabela_(ABA_ITENS, 1, col, linhas, 1);
+  gravarTabela_(ABA_ITENS, 1, col, linhas, []);
 }
 
 function gravarCustos_(regs, ctx) {
@@ -368,13 +387,14 @@ function gravarCustos_(regs, ctx) {
       linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
     }),
   );
-  gravarTabela_(ABA_CUS, 2, col, linhas, 1);
+  gravarTabela_(ABA_CUS, 2, col, linhas, []);
   return linhas.length;
 }
 
-// Regrava uma aba inteira: cabecalho, formatos por coluna, filtro e listras
-// (da coluna colZebra em diante, para nao cobrir as celulas pintadas)
-function gravarTabela_(nomeAba, posicao, col, linhas, colZebra) {
+// Regrava uma aba inteira: cabecalho, formatos por coluna, filtro e listras.
+// semZebra = colunas (1 = A) pintadas pelo script: as listras pulam essas
+// colunas (uma faixa por trecho continuo, faixas nao podem se sobrepor)
+function gravarTabela_(nomeAba, posicao, col, linhas, semZebra) {
   const ss = SpreadsheetApp.getActive();
   const aba = ss.getSheetByName(nomeAba) || ss.insertSheet(nomeAba, posicao);
   const nCol = col.length;
@@ -402,12 +422,21 @@ function gravarTabela_(nomeAba, posicao, col, linhas, colZebra) {
 
   aba.setFrozenRows(1);
   aba.getRange(1, 1, Math.max(linhas.length, 1) + 1, nCol).createFilter();
-  if (linhas.length > 0 && nCol >= colZebra) {
-    aba
-      .getRange(2, colZebra, linhas.length, nCol - colZebra + 1)
-      .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false)
-      .setFirstRowColor(COR_ZEBRA_1)
-      .setSecondRowColor(COR_ZEBRA_2);
+  if (linhas.length > 0) {
+    const pula = semZebra || [];
+    let ini = 0;
+    for (let c = 1; c <= nCol + 1; c++) {
+      const livre = c <= nCol && pula.indexOf(c) < 0;
+      if (livre && !ini) ini = c;
+      if (!livre && ini) {
+        aba
+          .getRange(2, ini, linhas.length, c - ini)
+          .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false)
+          .setFirstRowColor(COR_ZEBRA_1)
+          .setSecondRowColor(COR_ZEBRA_2);
+        ini = 0;
+      }
+    }
   }
   return aba;
 }

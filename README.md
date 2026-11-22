@@ -192,7 +192,7 @@ Uma planilha Google com os pedidos da logística, que se atualiza sozinha a cada
 
 | Aba | Conteúdo |
 |---|---|
-| Pedidos | Uma linha por pedido (45 colunas). A ordem é por quadro (Previsto, Faturado, Enviado, Entregue, Retornou) e, dentro do quadro, pelo número do pedido. Só as células de Quadro e Situação da entrega são pintadas |
+| Pedidos | Uma linha por pedido (45 colunas). Começa com Pedido, Saída programada, Envio, Previsão de entrega e Data de entrega (`PRIMEIRAS_PEDIDOS`); depois vêm Quadro, Situação da entrega e as demais colunas, na ordem do Exportar XLSX. As linhas seguem a ordem dos quadros (Previsto, Faturado, Enviado, Entregue, Retornou) e, dentro de cada quadro, o número do pedido. Só as células de Quadro e Situação da entrega são pintadas |
 | Itens | Uma linha por item (produto, quantidade, TES, NF, números de série) |
 | Custos de frete | Uma linha por cobrança da ZLC (CTE, reentregas, taxas), com a diferença das divergentes. Só aparece com a ZLC no ambiente; sem ela, a aba Pedidos mostra o CTE da SC5 |
 | Resumo | Quatro tabelas: pontos de atenção (iguais aos cartões da tela), pedidos por quadro, transportadoras (enviados e entregues, % no prazo, frete cobrado × custo) e entregues por mês da entrega (últimos 12 meses) |
