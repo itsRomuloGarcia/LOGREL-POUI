@@ -227,6 +227,7 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - **Testado** no Node com uma imitação do Apps Script e a API falsa do comunicado (`Comunicados/.../_gerador/mock2.cjs`, 97 pedidos fictícios), com e sem ZLC: sem erro, abas e cores conferidas. **Não testado no Google**; a planilha ainda não foi criada.
 
 ## Pendências
+- **22/11/2026, ideia em estudo (nada implementado): logística reversa e CTEs de entrada.** Desenho, respostas do usuário e perguntas em aberto estão em `IDEIAS-REVERSA-E-CTE.md`. O usuário vai estudar como o faturamento lança as NFs e como cruzar isso no Protheus. **Não implementar antes dessas respostas.**
 - **22/11/2026:** criar a planilha Google, colar o `planilha/Codigo.gs`, cadastrar as propriedades (REST da produção 10407, usuário de leitura) e ligar a atualização automática. Conferir as contagens do Resumo com a tela.
 - **19/11/2026 (4ª):** compilar `RESTLOGREL.tlpp` `2026-11-19c` (inclui a 19b, TES 610) e o `logrel.app` de 19/11 (telefone; inclui custos visíveis e Exportar XLSX).
 - **19/11/2026 (3ª):** compilar o `RESTLOGREL.tlpp` `2026-11-19b` (TES 610) na homologação; conferir 000039 e 000432 na tela. Rodar a comparação da planilha com a produção (só leitura) quando houver permissão.
