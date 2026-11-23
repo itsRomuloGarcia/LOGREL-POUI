@@ -47,6 +47,13 @@
 //   - "telefone" (cliente de entrega) e "telefoneCliente" (cliente do pedido):
 //     A1_DDD + A1_TEL (A2_* na devolucao/beneficiamento), 2026-11-19c.
 //   - "transportadoras": SA4 inteira (codigo e nome), para a edicao.
+//   - Endereco do cliente de ENTREGA (2026-11-23a, pedido do usuario):
+//     "enderecoEntrega", "complementoEntrega", "bairroEntrega", "cepEntrega"
+//     (A1_END/A1_COMPLEM/A1_BAIRRO/A1_CEP; A2_* na devolucao/beneficiamento),
+//     do mesmo cadastro da cidade/UF. Coluna que nao existe no SA1/SA2 vai vazia.
+//   - "mensagemNota" = C5_MENNOTA (mensagem para a nota), so leitura.
+//   - "obsRetorno" = C5_ZOBSRET (observacao do retorno a empresa), campo novo
+//     e opcional: sem ele vai vazio e entra em camposFaltando.
 //   - Numeros de serie (2026-11-16a, pedido do usuario, igual ao RX Pedidos):
 //     cada item ganha "numerosSerie" = [[serie, nf], ...] da Z01 (Z01_PEDIDO,
 //     Z01_ITEM, Z01_SERIE, Z01_NFEDO), com e sem NF. Sem a tabela Z01 ou as
@@ -64,8 +71,9 @@
 //   - C5_ZOBS ("obsEntrega"): observacoes da entrega, texto livre. Caracter ou
 //     memo: a leitura sai pelo tipo da coluna no Oracle (ObsSql) e a gravacao
 //     de memo nao passa pelo limite de tamanho;
-//   - retorno exige envio e retorno >= envio; motivo e pedido do reenvio so
-//     com data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
+//   - retorno exige envio e retorno >= envio; motivo, pedido do reenvio e
+//     observacao do retorno (C5_ZOBSRET, "obsRetorno", 2026-11-23a) so com
+//     data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
 //   - transportadora, volume, especie (C5_ESPECI1), peso liquido (C5_PESOL) e
 //     peso bruto (C5_PBRUTO) so enquanto o pedido NAO tem nota: sao dados da
 //     NF-e e tem que estar no pedido antes da emissao (depois ja sairam no
@@ -108,7 +116,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-19c"
+#define LG_VERSAO     "2026-11-23a"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -395,7 +403,7 @@ Static Function GravaPedido()
             EndIf
          Else
             xVal := AllTrim(TxtIn(jBody[cChave]))
-            If cCampo == "C5_ZOBS"
+            If cCampo == "C5_ZOBS" .or. cCampo == "C5_ZOBSRET"
                // quebra de linha: CRLF no memo; espaco no campo caracter
                xVal := StrTran(StrTran(xVal, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
                xVal := StrTran(xVal, Chr(10), IIf(TamSX3(cCampo)[3] == "M", Chr(13) + Chr(10), " "))
@@ -485,7 +493,7 @@ Static Function GravaPedido()
          Break
       EndIf
       If lRetCampos .and. Empty(dRet)
-         jRet := BuildErro(400, "SEM_RETORNO", "Motivo e pedido do reenvio so com a data do retorno.")
+         jRet := BuildErro(400, "SEM_RETORNO", "Motivo, pedido do reenvio e observacao do retorno so com a data do retorno.")
          lRespondido := .T.
          Break
       EndIf
@@ -692,6 +700,7 @@ Static Function MapaCampos()
    aAdd(aMapa, {"motivoRetorno",     "C5_ZMOTRET", "B", "RET"})
    aAdd(aMapa, {"pedidoReenvio",     "C5_ZPEDREN", "P", "RET"})
    aAdd(aMapa, {"obsEntrega",        "C5_ZOBS",    "C", "LOG"})
+   aAdd(aMapa, {"obsRetorno",        "C5_ZOBSRET", "C", "RET"})
    aAdd(aMapa, {"transportadora",    "C5_TRANSP",  "T", "COM"})
    aAdd(aMapa, {"volume",            "C5_VOLUME1", "N", "COM"})
    aAdd(aMapa, {"especie",           "C5_ESPECI1", "C", "COM"})
@@ -719,6 +728,7 @@ Static Function TituloCampo(cCampo)
       {"C5_ZMOTRET", "Motivo do retorno"}, ;
       {"C5_ZPEDREN", "Pedido do reenvio"}, ;
       {"C5_ZOBS", "Observacoes da entrega"}, ;
+      {"C5_ZOBSRET", "Observacao do retorno"}, ;
       {"C5_TRANSP", "Transportadora"}, ;
       {"C5_VOLUME1", "Volume"}, ;
       {"C5_ESPECI1", "Especie"}, ;
@@ -833,6 +843,8 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    Local aPed    := {}
    Local lTemPed := .F.
    Local cExist  := ColunasExistentes()
+   Local cExA1   := ColunasDe("SA1")
+   Local cExA2   := ColunasDe("SA2")
    Local cQuery  := ""
    Local cAlias  := GetNextAlias()
    Local oStmt   := Nil
@@ -864,6 +876,11 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SFE.A2_TEL ELSE SAE.A1_TEL END AS TELENT, "
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_DDD ELSE SA1.A1_DDD END AS DDDCLI, "
    cQuery += "       CASE WHEN SC5.C5_TIPO IN ('D','B') THEN SA2.A2_TEL ELSE SA1.A1_TEL END AS TELCLI, "
+   // endereco do cliente de entrega (2026-11-23a): mesmo cadastro da cidade/UF
+   cQuery += "       " + EndCol(cExA1, cExA2, "END", "ENDENT") + ", "
+   cQuery += "       " + EndCol(cExA1, cExA2, "COMPLEM", "COMPENT") + ", "
+   cQuery += "       " + EndCol(cExA1, cExA2, "BAIRRO", "BAIRENT") + ", "
+   cQuery += "       " + EndCol(cExA1, cExA2, "CEP", "CEPENT") + ", "
    cQuery += "       SA3.A3_NOME AS VENDEDOR, SA4.A4_NOME AS TRANSP, "
    cQuery += "       " + ColOpc(cExist, "C5_ZTPPEDI", "TIPOPED", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZFRETE", "ZFRETE", @aFalta) + ", "
@@ -885,7 +902,9 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ZDTRET", "DTRET", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZMOTRET", "MOTRET", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZPEDREN", "PEDREN", @aFalta) + ", "
-   cQuery += "       " + ObsSql(cExist, @aFalta) + " AS OBSENT, "
+   cQuery += "       " + ObsSql(cExist, @aFalta, "C5_ZOBS") + " AS OBSENT, "
+   cQuery += "       " + ObsSql(cExist, @aFalta, "C5_ZOBSRET") + " AS OBSRET, "
+   cQuery += "       " + ObsSql(cExist, @aFalta, "C5_MENNOTA") + " AS MENNOTA, "
    cQuery += "       SC6.C6_ITEM AS ITEM, SC6.C6_PRODUTO AS PRODUTO, SC6.C6_DESCRI AS DESCRI, "
    cQuery += "       SC6.C6_QTDVEN AS QTDVEN, SC6.C6_QTDENT AS QTDENT, SC6.C6_VALOR AS VALOR, "
    cQuery += "       SC6.C6_TES AS TES, SF4.F4_TEXTO AS DESCTES, SC6.C6_NOTA AS NOTA, SC6.C6_SERIE AS SERIE, "
@@ -1013,6 +1032,12 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["motivoRetorno"]     := AllTrim(cValToChar((cAlias)->MOTRET))
          jPed["pedidoReenvio"]     := AllTrim(cValToChar((cAlias)->PEDREN))
          jPed["obsEntrega"]        := TxtOut(cValToChar((cAlias)->OBSENT))
+         jPed["obsRetorno"]        := TxtOut(cValToChar((cAlias)->OBSRET))
+         jPed["mensagemNota"]      := TxtOut(cValToChar((cAlias)->MENNOTA))
+         jPed["enderecoEntrega"]   := TxtOut(cValToChar((cAlias)->ENDENT))
+         jPed["complementoEntrega"]:= TxtOut(cValToChar((cAlias)->COMPENT))
+         jPed["bairroEntrega"]     := TxtOut(cValToChar((cAlias)->BAIRENT))
+         jPed["cepEntrega"]        := AllTrim(cValToChar((cAlias)->CEPENT))
       EndIf
 
       jIt := JsonObject():New()
@@ -1174,18 +1199,29 @@ Static Function ColOpc(cExist, cCampo, cApelido, aFalta)
    aAdd(aFalta, cCampo)
 Return "' ' AS " + cApelido
 
-// C5_ZOBS (observacoes da entrega) na query, pelo tipo da coluna no Oracle:
-// memo real fica em BLOB/CLOB e nao sai direto num SELECT (2026-11-15b)
-Static Function ObsSql(cExist, aFalta)
+// Coluna do endereco do cliente de entrega: SA2 (SFE) na devolucao/beneficiamento,
+// SA1 (SAE) nos outros. Coluna que nao existe no cadastro vira ' ' (coluna
+// inexistente derruba a thread do REST). cSufixo = END, COMPLEM, BAIRRO, CEP.
+Static Function EndCol(cExA1, cExA2, cSufixo, cApelido)
+   Local cA1 := IIf(("|A1_" + cSufixo + "|") $ cExA1, "SAE.A1_" + cSufixo, "' '")
+   Local cA2 := IIf(("|A2_" + cSufixo + "|") $ cExA2, "SFE.A2_" + cSufixo, "' '")
+Return "CASE WHEN SC5.C5_TIPO IN ('D','B') THEN " + cA2 + " ELSE " + cA1 + " END AS " + cApelido
+
+// Campo de texto livre da SC5 na query, pelo tipo da coluna no Oracle: memo
+// real fica em BLOB/CLOB e nao sai direto num SELECT (2026-11-15b). Usado no
+// C5_ZOBS, no C5_ZOBSRET e no C5_MENNOTA (2026-11-23a). Campo que nao existe
+// vira ' ' e entra em aFalta.
+Static Function ObsSql(cExist, aFalta, cCampo)
    Local cTipo := ""
    Local cAl   := GetNextAlias()
    Local oStmt := Nil
-   If !("|C5_ZOBS|" $ cExist)
-      aAdd(aFalta, "C5_ZOBS")
+   If !(("|" + cCampo + "|") $ cExist)
+      aAdd(aFalta, cCampo)
       Return "' '"
    EndIf
-   oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ? AND COLUMN_NAME = 'C5_ZOBS'")
+   oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ? AND COLUMN_NAME = ?")
    oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
+   oStmt:SetString(2, cCampo)
    cAl := oStmt:OpenAlias(cAl)
    If !Empty(cAl) .and. Select(cAl) > 0
       cTipo := Upper(AllTrim((cAl)->DATA_TYPE))
@@ -1193,18 +1229,22 @@ Static Function ObsSql(cExist, aFalta)
    EndIf
    oStmt:Destroy()
    If cTipo == "BLOB"
-      Return "NVL(UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(SC5.C5_ZOBS, 2000, 1)), ' ')"
+      Return "NVL(UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(SC5." + cCampo + ", 2000, 1)), ' ')"
    ElseIf cTipo == "CLOB" .or. cTipo == "NCLOB"
-      Return "NVL(DBMS_LOB.SUBSTR(SC5.C5_ZOBS, 2000, 1), ' ')"
+      Return "NVL(DBMS_LOB.SUBSTR(SC5." + cCampo + ", 2000, 1), ' ')"
    EndIf
-Return "SC5.C5_ZOBS"
+Return "SC5." + cCampo
 
 // "|C5_X|C5_Y|..." com as colunas fisicas da SC5 (ALL_TAB_COLUMNS)
 Static Function ColunasExistentes()
+Return ColunasDe("SC5")
+
+// "|X_A|X_B|..." com as colunas fisicas da tabela do alias (ALL_TAB_COLUMNS)
+Static Function ColunasDe(cAliasTab)
    Local cRet  := "|"
    Local cAl   := GetNextAlias()
    Local oStmt := FWExecStatement():New("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ?")
-   oStmt:SetString(1, AllTrim(RetSqlName("SC5")))
+   oStmt:SetString(1, AllTrim(RetSqlName(cAliasTab)))
    cAl := oStmt:OpenAlias(cAl)
    If !Empty(cAl) .and. Select(cAl) > 0
       Do While !(cAl)->(Eof())
@@ -1270,7 +1310,7 @@ Return cSN
 // Tamanho dos campos de texto (a tela limita a digitacao)
 Static Function Tamanhos()
    Local jT    := JsonObject():New()
-   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP", "C5_ESPECI1", "C5_ZOBS"}
+   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP", "C5_ESPECI1", "C5_ZOBS", "C5_ZOBSRET"}
    Local nI    := 0
    DbSelectArea("SC5")
    For nI := 1 to Len(aCpos)

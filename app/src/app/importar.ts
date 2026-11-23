@@ -33,6 +33,7 @@ export const DESTINOS: [Destino, string][] = [
   ['pesoLiquido', 'Peso líquido'],
   ['pesoBruto', 'Peso bruto'],
   ['obsEntrega', 'Observações da entrega'],
+  ['obsRetorno', 'Observação do retorno'],
 ];
 
 /** Campos que a planilha atualiza (definido pelo usuario em 13/11/2026; CTE da

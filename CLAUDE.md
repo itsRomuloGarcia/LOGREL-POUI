@@ -226,7 +226,32 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - **Abas:** Pedidos, Itens e Custos de frete têm as mesmas colunas do Exportar XLSX. Resumo traz pontos de atenção, quadros, transportadoras e entregues por mês. Cor só nas células Quadro e Situação da entrega, como no RX.
   - **Testado** no Node com uma imitação do Apps Script e a API falsa do comunicado (`Comunicados/.../_gerador/mock2.cjs`, 97 pedidos fictícios), com e sem ZLC: sem erro, abas e cores conferidas. **Não testado no Google**; a planilha ainda não foi criada.
 
+- **23/11/2026, pedido do usuário: melhorias na tela** (API `2026-11-23a` + `logrel.app` + `LOGRELUPD` + planilha).
+  - **Informação faltando nos Quadros:** o usuário escolheu, entre 2 opções, o **filtro em cada quadro**, em vez de uma coluna separada.
+    - `pendencias()` em `painel.ts` calcula as pendências por etapa e as guarda em `Reg.pend`. `PEND_TXT` tem os textos do filtro e do selo.
+    - Cada coluna tem o select `data-filtro-quadro` (`e.fQuadro`, não guardado no navegador). O cartão ganha o selo `.pill.falta`, e o "aguardando reenvio" fica com o selo próprio.
+    - Com filtro ligado, os Entregues antigos aparecem.
+    - Na Lista, no XLSX e na planilha Google: coluna "Informação faltando".
+  - **Cards que filtram (`button.kpi`, `e.fGlobal`):** "Com informação faltando" e **"Saíram hoje"** (`dataEnvio` = hoje, pedido do usuário). Clicar liga; clicar de novo, ou na faixa `.filtro-ativo`, desliga.
+  - **Observação do retorno:** o usuário escolheu **campo novo**, `C5_ZOBSRET`. Ele cria o campo no SX3 da homologação (sugestão: C 250, pasta 3, título "Obs. Retorno") e leva para a produção pelo `LOGRELUPD`, que agora tem 18 campos em `Esperados()`.
+    - API: grupo RET, só com data do retorno, e mensagem `SEM_RETORNO` atualizada. Também entra no histórico (`TituloCampo`) e em `Tamanhos`.
+    - Tela: textarea no bloco Retorno, `RETORNO`/`OBS` e limpeza junto com a data do retorno.
+    - Sem o campo, ou com API anterior a `2026-11-23a`, o campo fica desligado.
+  - **Endereço e C5_MENNOTA na gaveta:** C5_MENNOTA só para leitura (escolha do usuário).
+    - O endereço vem do mesmo cadastro da cidade/UF: `EndCol` usa SAE/SFE, com `A1_END`/`A1_COMPLEM`/`A1_BAIRRO`/`A1_CEP` ou os `A2_*`.
+    - Coluna inexistente vira `' '`, conferida em `ColunasDe("SA1"/"SA2")`.
+    - `A1_ENDENT` (endereço de entrega do cadastro) não é usado.
+    - `ObsSql` ficou genérico (C5_ZOBS, C5_ZOBSRET, C5_MENNOTA), lendo memo real por BLOB/CLOB.
+  - **Período saiu do topo:** `consultar()` usa `e.de` (01/01 do ano anterior) até hoje.
+  - **Testado** com a cópia da API falsa (campos novos, pedidos sem transportadora e peso, 2 envios hoje), `ng serve` e Chrome headless: 17 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi testada pelo harness do Node: 18 pendências e 2 "saíram hoje", iguais à tela. Pacotes regerados em 23/11, 20:54. **Não testado no Protheus.**
+
 ## Pendências
+- **23/11/2026:**
+  1. O usuário cria o `C5_ZOBSRET` no SX3 da homologação.
+  2. Compilar o `RESTLOGREL.tlpp` `2026-11-23a`, o `logrel.app` de 23/11 e o `LOGRELUPD.prw`.
+  3. Conferir o endereço e o C5_MENNOTA na gaveta.
+  4. Na produção: exportar de novo na homologação e importar (cria só o `C5_ZOBSRET`); depois compilar os mesmos fontes.
+  5. Colar o `planilha/Codigo.gs` novo no Apps Script.
 - **22/11/2026, ideia em estudo (nada implementado): logística reversa e CTEs de entrada.** Desenho, respostas do usuário e perguntas em aberto estão em `IDEIAS-REVERSA-E-CTE.md`. O usuário vai estudar como o faturamento lança as NFs e como cruzar isso no Protheus. **Não implementar antes dessas respostas.**
 - **22/11/2026:** criar a planilha Google, colar o `planilha/Codigo.gs`, cadastrar as propriedades (REST da produção 10407, usuário de leitura) e ligar a atualização automática. Conferir as contagens do Resumo com a tela.
 - **19/11/2026 (4ª):** compilar `RESTLOGREL.tlpp` `2026-11-19c` (inclui a 19b, TES 610) e o `logrel.app` de 19/11 (telefone; inclui custos visíveis e Exportar XLSX).

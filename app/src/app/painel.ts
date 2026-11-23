@@ -112,6 +112,7 @@ const CAMPO: Record<keyof PedidoEdicao, string> = {
   pesoLiquido: 'C5_PESOL',
   pesoBruto: 'C5_PBRUTO',
   obsEntrega: 'C5_ZOBS',
+  obsRetorno: 'C5_ZOBSRET',
 };
 const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado', 'pesoLiquido', 'pesoBruto'];
 const REENTREGA: (keyof PedidoEdicao)[] = ['cteReentrega', 'valorCteReentrega', 'dataNovaEntrega'];
@@ -123,7 +124,31 @@ const PARA_NFE: (keyof PedidoEdicao)[] = ['especie', 'pesoLiquido', 'pesoBruto']
 /** Peso com ate 4 casas (C5_PESOL/C5_PBRUTO), sem zeros a mais */
 const pesoTxt = (n: number | undefined) => (n ? n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 4 }) : '');
 /** So valem com a data do retorno */
-const RETORNO: (keyof PedidoEdicao)[] = ['motivoRetorno', 'pedidoReenvio'];
+const RETORNO: (keyof PedidoEdicao)[] = ['motivoRetorno', 'pedidoReenvio', 'obsRetorno'];
+/** Textos livres: campo caracter vira uma linha so; memo mantem as quebras */
+const OBS: (keyof PedidoEdicao)[] = ['obsEntrega', 'obsRetorno'];
+
+/** Informacao que falta no pedido (pedido do usuario em 23/11/2026): filtro de
+ *  cada quadro, selo "Falta" no cartao e card no topo. [texto do filtro, selo] */
+type Pend = 'transp' | 'volume' | 'especie' | 'peso' | 'envio' | 'previsao' | 'entrega' | 'novaData' | 'cte' | 'tpmat' | 'indicador' | 'motivo' | 'reenvio';
+const PEND_TXT: Record<Pend, [string, string]> = {
+  transp: ['Sem transportadora', 'transportadora'],
+  volume: ['Sem volume', 'volume'],
+  especie: ['Sem espécie', 'espécie'],
+  peso: ['Sem peso líquido ou bruto', 'peso'],
+  envio: ['Com NF há mais de 2 dias, sem data de envio', 'data de envio'],
+  previsao: ['Sem previsão de entrega', 'previsão de entrega'],
+  entrega: ['Previsão vencida, sem data de entrega', 'data de entrega'],
+  novaData: ['Reentrega sem a nova data de entrega', 'nova data de entrega'],
+  cte: ['Sem CTE do envio', 'CTE do envio'],
+  tpmat: ['Sem tipo de material', 'tipo de material'],
+  indicador: ['Atrasado sem indicador de atraso', 'indicador de atraso'],
+  motivo: ['Sem motivo do retorno', 'motivo do retorno'],
+  reenvio: ['Sem pedido do reenvio', 'pedido do reenvio'],
+};
+const PEND_ORDEM = Object.keys(PEND_TXT) as Pend[];
+/** Faturado sem envio: pendente depois de N dias com NF (igual ao card "Faturados parados") */
+const DIAS_FAT_PARADO = 2;
 const ROTULO: Record<string, string> = Object.fromEntries(DESTINOS.filter(([d]) => d && d !== 'pedido'));
 
 /** Ordem de cada quadro: [id, texto, data usada, crescente] */
@@ -218,6 +243,8 @@ interface Reg {
   difDiv: number;
   /** Numeros dos CTEs (ZLC ou SC5) */
   ctes: string[];
+  /** Informacao que falta preencher (PEND_TXT) */
+  pend: Pend[];
   qtd: number;
   valor: number;
   parcial: boolean;
@@ -296,6 +323,10 @@ interface Estado {
   entTodos: boolean;
   /** quadros: ordem escolhida em cada coluna (ORD_QUADRO) */
   ordQuadro: Record<Etapa, string>;
+  /** quadros: filtro de cada coluna ('' todos, 'pend' qualquer pendencia, ou uma Pend) */
+  fQuadro: Record<Etapa, string>;
+  /** quadros: card do topo clicado ('' nenhum, 'pend' com pendencia, 'hoje' sairam hoje) */
+  fGlobal: '' | 'pend' | 'hoje';
   /** indicadores: medida da tabela por transportadora x mes */
   medida: 'custo' | 'cobrado' | 'pedidos';
   ordRank: { k: string; asc: boolean };
@@ -368,6 +399,8 @@ export class Painel {
       entTodos: false,
       // a preferencia guardada antes da coluna Retornados nao tem "ret"
       ordQuadro: { prev: 'emi-asc', fat: 'fat-asc', env: 'prev-asc', ent: 'ent-desc', ret: 'aguarda', ...ler('ord-quadro', {}) },
+      fQuadro: { prev: '', fat: '', env: '', ent: '', ret: '' },
+      fGlobal: '',
       medida: ler('medida', 'custo'),
       ordRank: { k: 'env', asc: false },
       compara: ler('compara', 'pp'),
@@ -395,9 +428,6 @@ export class Painel {
             <input id="lg-fde" type="date" aria-label="De"><span class="muted">a</span><input id="lg-fate" type="date" aria-label="Até"></div></div>
           <div class="campo campo-limpar"><button type="button" class="btn" data-acao="limpar-filtros">Limpar filtros</button></div>
         </div>
-        <div class="wrap controles consulta">
-          <div class="campo"><label for="lg-de" title="O período vale para os pedidos com NF. Os pedidos sem NF (Previstos) vêm todos, de qualquer emissão.">Consultar no Protheus: emissão dos pedidos com NF</label><div class="periodo"><input id="lg-de" type="date" value="${iso(this.e.de)}" aria-label="De"><span class="muted">a</span><input id="lg-ate" type="date" value="${iso(this.e.ate)}" aria-label="Até"><button class="btn pri" data-acao="consultar">Consultar</button></div></div>
-        </div>
         <div class="wrap" id="lg-faltam" hidden></div>
         <nav class="wrap abas" id="lg-abas"></nav>
       </div>
@@ -424,6 +454,8 @@ export class Painel {
     if (!r.versao || r.versao < '2026-11-15a') PARA_NFE.forEach((k) => this.faltando.add(CAMPO[k]));
     // API anterior a 2026-11-15b: sem C5_ZOBS e a saida programada ainda copia para o envio
     if (!r.versao || r.versao < '2026-11-15b') this.faltando.add(CAMPO.obsEntrega);
+    // API anterior a 2026-11-23a: sem a observacao do retorno
+    if (!r.versao || r.versao < '2026-11-23a') this.faltando.add(CAMPO.obsRetorno);
     // Com a tabela de custos, o CTE da SC5 nao e mais usado: nao avisa se faltar
     if (r.temCustos) ['C5_ZCTE', 'C5_ZVLRCTE', 'C5_ZCTEREE', 'C5_ZVCTERE'].forEach((c) => this.faltando.delete(c));
     this.regs = (r.pedidos || []).map((p) => this.montar(p));
@@ -479,6 +511,7 @@ export class Painel {
     const cus = this.temCustos ? p.custos || [] : null;
     const abertos = cus ? cus.filter((c) => EM_ABERTO.includes(c.situacao)) : [];
     const ctes = cus ? cus.map((c) => c.cte).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean);
+    const pend = this.pendencias(p, et, prazo);
     return {
       p,
       et,
@@ -490,14 +523,56 @@ export class Painel {
       nDiv: abertos.length,
       difDiv: abertos.filter((c) => c.valorEsperado > 0).reduce((s, c) => s + (c.valor - c.valorEsperado), 0),
       ctes,
+      pend,
       qtd: itens.reduce((s, i) => s + (i.quantidade || 0), 0),
       valor: itens.reduce((s, i) => s + (i.valor || 0), 0),
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, p.telefone, p.telefoneCliente, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, p.obsRetorno, p.mensagemNota, p.enderecoEntrega, p.bairroEntrega, p.telefone, p.telefoneCliente, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
       ),
     };
+  }
+
+  /** O que falta preencher no pedido, pela etapa (pedido do usuario, 23/11/2026).
+   *  Campo que nao existe no ambiente nao conta. Transportadora, volume, especie e
+   *  pesos so nos Previstos: com NF eles ja sairam no documento e nao editam aqui. */
+  private pendencias(p: Pedido, et: Etapa, prazo: Prazo): Pend[] {
+    const tem = (c: string) => !this.faltando.has(c);
+    const out: Pend[] = [];
+    if (et === 'prev') {
+      if (!p.transportadora) out.push('transp');
+      if (tem(CAMPO.volume) && !p.volume) out.push('volume');
+      if (tem(CAMPO.especie) && !p.especie) out.push('especie');
+      if ((tem(CAMPO.pesoLiquido) && !p.pesoLiquido) || (tem(CAMPO.pesoBruto) && !p.pesoBruto)) out.push('peso');
+    }
+    if (et === 'fat' && tem(CAMPO.dataEnvio) && p.dataFaturamento && dias(dt(p.dataFaturamento) as Date, this.hoje) > DIAS_FAT_PARADO) out.push('envio');
+    if (et === 'env' || et === 'ent') {
+      if (prazo === 'semprev' && tem(CAMPO.dataPrevisao)) out.push('previsao');
+      if (et === 'env' && prazo === 'atrasado' && tem(CAMPO.dataEntrega)) out.push('entrega');
+      if (et === 'env' && p.reentrega === 'SIM' && !p.dataNovaEntrega) out.push('novaData');
+      if (this.temCustos ? !(p.custos || []).some((c) => c.tipo === 'E') : tem(CAMPO.cte) && !p.cte) out.push('cte');
+      if (tem(CAMPO.tipoMaterial) && !p.tipoMaterial) out.push('tpmat');
+      if (prazo === 'atrasado' && tem(CAMPO.indicador) && !p.indicador) out.push('indicador');
+    }
+    if (et === 'ret') {
+      if (tem(CAMPO.motivoRetorno) && !p.motivoRetorno) out.push('motivo');
+      if (tem(CAMPO.pedidoReenvio) && !p.pedidoReenvio) out.push('reenvio');
+    }
+    return out;
+  }
+
+  /** Endereco de entrega numa linha: rua, complemento, bairro, cidade/UF e CEP */
+  private enderecoTxt(p: Pedido, comCidade = true): string {
+    const cep = (p.cepEntrega || '').replace(/\D/g, '');
+    return [
+      [p.enderecoEntrega, p.complementoEntrega].filter(Boolean).join(' - '),
+      p.bairroEntrega,
+      comCidade ? [p.cidade, p.uf].filter(Boolean).join('/') : '',
+      cep ? `CEP ${cep.length === 8 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : cep}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
   }
 
   private reg(recno: number): Reg | undefined {
@@ -645,6 +720,12 @@ export class Painel {
   // ---------- Quadros ----------
   private telaQuadros(): string {
     const regs = this.base();
+    const hj = iso(this.hoje);
+    // cards do topo que filtram os quadros (23/11/2026)
+    const comPend = regs.filter((r) => r.pend.length);
+    const sairamHoje = regs.filter((r) => r.p.dataEnvio === hj);
+    const g = this.e.fGlobal;
+    const visiveis = g === 'pend' ? comPend : g === 'hoje' ? sairamHoje : regs;
     const limEnt = new Date(this.hoje.getTime() - DIAS_ENTREGUES * 86400000);
     const atrTransito = regs.filter((r) => r.et === 'env' && r.prazo === 'atrasado').length;
     const venceTransito = regs.filter((r) => r.et === 'env' && r.prazo === 'vence').length;
@@ -652,8 +733,24 @@ export class Painel {
     const cols = ETAPAS.map((et) => {
       const opcoes = ORD_QUADRO[et.id];
       const [, , chave, asc] = opcoes.find((o) => o[0] === this.e.ordQuadro[et.id]) || opcoes[0];
-      let lista = regs
-        .filter((r) => r.et === et.id)
+      const daEtapa = visiveis.filter((r) => r.et === et.id);
+      // filtro da coluna: so as opcoes que tem pedido (e a escolhida, mesmo zerada)
+      const fq = this.e.fQuadro[et.id];
+      const nPend = daEtapa.filter((r) => r.pend.length).length;
+      const opsF: [string, string][] = [['', `Mostrar todos (${n0(daEtapa.length)})`]];
+      if (nPend || fq === 'pend') opsF.push(['pend', `Com informação faltando (${n0(nPend)})`]);
+      PEND_ORDEM.forEach((k) => {
+        const n = daEtapa.filter((r) => r.pend.includes(k)).length;
+        if (n || fq === k) opsF.push([k, `${PEND_TXT[k][0]} (${n0(n)})`]);
+      });
+      const filtroQ =
+        opsF.length > 1
+          ? `<select class="ord-quadro filtro-quadro${fq ? ' ativo' : ''}" data-filtro-quadro="${et.id}" aria-label="Filtro de ${esc(et.nome)}">${opsF
+              .map(([id, txt]) => `<option value="${id}" ${id === fq ? 'selected' : ''}>${esc(txt)}</option>`)
+              .join('')}</select>`
+          : '';
+      let lista = daEtapa
+        .filter((r) => (!fq ? true : fq === 'pend' ? r.pend.length > 0 : r.pend.includes(fq as Pend)))
         .sort((a, b) => {
           const c = chave(a).localeCompare(chave(b)) || a.p.pedido.localeCompare(b.p.pedido);
           return asc ? c : -c;
@@ -664,7 +761,8 @@ export class Painel {
       const total = lista.length;
       const qtd = lista.reduce((s, r) => s + r.qtd, 0);
       let ocultosEnt = 0;
-      if (et.id === 'ent' && !this.e.entTodos) {
+      // com filtro ligado os entregues antigos aparecem: e la que falta informacao
+      if (et.id === 'ent' && !this.e.entTodos && !fq && !g) {
         const recentes = lista.filter((r) => (dt(r.entFinal) as Date) >= limEnt);
         ocultosEnt = lista.length - recentes.length;
         lista = recentes;
@@ -681,12 +779,25 @@ export class Painel {
               : ''
           : '';
       return `<section class="quadro" style="--cor:${et.cor}" aria-label="${esc(et.nome)}">
-        <header><h2><span>${esc(et.nome)}</span><span class="q num">${n0(total)}</span></h2><p>${esc(et.desc)} · ${n0(qtd)} un</p>${seletor}${entInfo ? `<p>${entInfo}</p>` : ''}</header>
+        <header><h2><span>${esc(et.nome)}</span><span class="q num">${n0(total)}</span></h2><p>${esc(et.desc)} · ${n0(qtd)} un${fq ? ` · filtrado de ${n0(daEtapa.length)}` : ''}</p>${seletor}${filtroQ}${entInfo ? `<p>${entInfo}</p>` : ''}</header>
         <div class="lista">${cartoes || '<p class="muted vazio">Nenhum pedido.</p>'}${mais ? `<div class="mais">${mais}</div>` : ''}</div>
       </section>`;
     }).join('');
     const kpi = (r: string, v: string, s: string, crit = false) => `<div class="kpi${crit ? ' crit' : ''}"><div class="r">${r}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+    // card que filtra: clicar liga; clicar de novo desliga
+    const kpiFiltro = (id: 'pend' | 'hoje', r: string, v: string, s: string, crit = false) =>
+      `<button type="button" class="kpi${crit ? ' crit' : ''}${g === id ? ' ativo' : ''}" data-acao="filtro-global" data-valor="${id}" aria-pressed="${g === id}"><div class="r">${r}</div><div class="v">${v}</div><div class="s">${g === id ? '<b>filtrando os quadros · clique para tirar</b>' : s}</div></button>`;
+    const unHoje = sairamHoje.reduce((s, r) => s + r.qtd, 0);
+    const trHoje = new Set(sairamHoje.map((r) => r.p.transportadora || '-')).size;
+    const faixa =
+      g === 'pend'
+        ? `Mostrando só os ${n0(comPend.length)} pedidos com informação faltando. Em cada quadro, o filtro escolhe qual informação.`
+        : g === 'hoje'
+          ? `Mostrando só os ${n0(sairamHoje.length)} pedidos que saíram hoje (${fmt(hj)}).`
+          : '';
     return `<div class="resumo">
+        ${kpiFiltro('pend', 'Com informação faltando', n0(comPend.length), 'transportadora, peso, datas, CTE… · clique para ver', comPend.length > 0)}
+        ${kpiFiltro('hoje', 'Saíram hoje', n0(sairamHoje.length), sairamHoje.length ? `${n0(unHoje)} un · ${n0(trHoje)} transportadora${trHoje === 1 ? '' : 's'} · clique para ver` : 'nenhum envio com a data de hoje')}
         ${kpi('Em trânsito atrasados', n0(atrTransito), 'passaram da previsão da transportadora', atrTransito > 0)}
         ${kpi('Vencem em até 2 dias', n0(venceTransito), 'em trânsito, perto da previsão')}
         ${kpi('Faturados parados', n0(fatParado), 'com NF há mais de 2 dias, sem envio', fatParado > 0)}
@@ -707,6 +818,7 @@ export class Painel {
           return kpi('Custo de frete em divergência', n0(div.length), div.length ? `pedidos em contato com a transportadora${dif ? ` · ${rs0(dif)} acima do esperado` : ''}` : 'nenhuma cobrança divergente', div.length > 0);
         })()}
       </div>
+      ${faixa ? `<p class="filtro-ativo" role="status"><span>${esc(faixa)}</span><button type="button" class="btn-txt" data-acao="filtro-global" data-valor="">Mostrar todos</button></p>` : ''}
       <div class="quadros">${cols}</div>`;
   }
 
@@ -720,6 +832,11 @@ export class Painel {
     if (r.parcial) pills.push(`<span class="pill semprev">NF parcial</span>`);
     if (r.et === 'ret' && !p.pedidoReenvio) pills.push(`<span class="pill atrasado">Aguardando reenvio</span>`);
     if (r.et === 'ret' && p.motivoRetorno) pills.push(`<span class="pill semprev">${esc(this.txtOp('motivoRetorno', p.motivoRetorno))}</span>`);
+    const falta = r.pend.filter((k) => k !== 'reenvio');
+    if (falta.length) {
+      const lista = falta.map((k) => PEND_TXT[k][1]).join(', ');
+      pills.push(`<span class="pill falta" title="Falta: ${esc(lista)}">${esc(falta.length === 1 ? `Falta ${PEND_TXT[falta[0]][1]}` : `Faltam ${falta.length} informações`)}</span>`);
+    }
     let datas = '';
     if (r.et === 'prev') datas = p.previsaoSaida ? `Saída programada ${fmtCurto(p.previsaoSaida)}` : `Emitido ${fmtCurto(p.emissao)}`;
     else if (r.et === 'fat') datas = `NF ${esc((p.notas || []).join(', '))} · ${fmtCurto(p.dataFaturamento)}${p.dataFaturamento ? ` (há ${dias(dt(p.dataFaturamento) as Date, this.hoje)} d)` : ''}`;
@@ -974,6 +1091,7 @@ export class Painel {
       { k: 'ped', t: 'Pedido', v: (r) => r.p.pedido },
       { k: 'et', t: 'Quadro', v: (r) => ET[r.et].curto },
       { k: 'sit', t: 'Situação', v: (r) => (r.prazo === 'atrasado' && r.atraso !== null ? `Atrasado ${r.atraso} d` : PRAZO_TXT[r.prazo]) },
+      { k: 'pend', t: 'Informação faltando', v: (r) => r.pend.map((k) => PEND_TXT[k][1]).join(', '), tit: 'O que falta preencher no pedido (mesmo filtro dos quadros)' },
       { k: 'emi', t: 'Emissão', v: (r) => r.p.emissao, f: d },
       { k: 'cli', t: 'Cliente', v: (r) => r.p.cliente },
       { k: 'loja', t: 'Loja', v: (r) => r.p.loja },
@@ -1436,6 +1554,7 @@ export class Painel {
               ${data('dataRetorno', 'Data do retorno', p.dataRetorno || '')}
               ${combo('motivoRetorno', 'Motivo do retorno', this.op('motivoRetorno'), p.motivoRetorno || '')}
               <div class="campo"><label for="f-pedidoReenvio">Pedido do reenvio</label><input id="f-pedidoReenvio" type="text" data-f="pedidoReenvio" value="${esc(p.pedidoReenvio || '')}" maxlength="6" placeholder="Nº do novo pedido" ${dis('pedidoReenvio')} ${tit('pedidoReenvio')}></div>
+              <div class="campo inteiro"><label for="f-obsRetorno">Observação do retorno</label><textarea id="f-obsRetorno" data-f="obsRetorno" rows="3" ${tam[CAMPO.obsRetorno] ? `maxlength="${tam[CAMPO.obsRetorno]}"` : ''} placeholder="Texto livre: o que voltou, estado da mercadoria, combinado com o cliente…" ${dis('obsRetorno')} ${tit('obsRetorno')}>${esc(p.obsRetorno || '')}</textarea></div>
             </fieldset>
             <ul class="avisos-f" id="lg-avisos" aria-live="polite"></ul>
           </form>
@@ -1448,12 +1567,14 @@ export class Painel {
               <div><dt>Nome</dt><dd>${esc(p.nome)}</dd></div>
               <div><dt>Grupo do cliente</dt><dd>${esc(p.grupo || '–')}</dd></div>
               <div><dt>Entrega</dt><dd>${esc([p.cidade, p.uf].filter(Boolean).join(' / ') || '–')}${p.nomeEntrega && p.nomeEntrega !== p.nome ? `<br><span class="muted">${esc(p.clienteEntrega)} ${esc(p.nomeEntrega)}</span>` : ''}</dd></div>
+              <div class="inteiro"><dt>Endereço de entrega</dt><dd>${esc(this.enderecoTxt(p) || '–')}</dd></div>
               <div><dt>Telefone${p.telefoneCliente && p.telefoneCliente !== p.telefone ? ' (entrega)' : ''}</dt><dd>${this.foneHtml(p.telefone)}</dd></div>
               ${p.telefoneCliente && p.telefoneCliente !== p.telefone ? `<div><dt>Telefone (cliente do pedido)</dt><dd>${this.foneHtml(p.telefoneCliente)}</dd></div>` : ''}
               <div><dt>Vendedor</dt><dd>${esc(p.vendedor || p.codVendedor || '–')}</dd></div>
               <div><dt>Tipo do pedido</dt><dd>${esc(this.txtOp('tipoPedido', p.tipoPedido) || '–')}</dd></div>
               <div><dt>Notas fiscais</dt><dd>${esc((p.notas || []).join(', ') || '–')}</dd></div>
               <div><dt>Valor dos itens</dt><dd>${rs(r.valor)} · ${n0(r.qtd)} un</dd></div>
+              <div class="inteiro"><dt>Mensagem para a nota (C5_MENNOTA)</dt><dd class="quebra">${p.mensagemNota ? esc(p.mensagemNota) : '<span class="muted">sem mensagem</span>'}</dd></div>
             </dl></section>
 
           <section><h3>Itens</h3>
@@ -1562,6 +1683,9 @@ export class Painel {
         ['UF', 'txt', (r) => r.p.uf],
         ['Telefone (entrega)', 'txt', (r) => r.p.telefone || ''],
         ['Telefone (cliente do pedido)', 'txt', (r) => r.p.telefoneCliente || ''],
+        ['Endereço de entrega', 'txt', (r) => [r.p.enderecoEntrega, r.p.complementoEntrega].filter(Boolean).join(' - ')],
+        ['Bairro', 'txt', (r) => r.p.bairroEntrega || ''],
+        ['CEP', 'txt', (r) => r.p.cepEntrega || ''],
         ['Vendedor', 'txt', (r) => r.p.vendedor],
         ['Cód. transportadora', 'txt', (r) => r.p.transportadora],
         ['Transportadora', 'txt', (r) => r.p.transportadoraNome],
@@ -1579,6 +1703,7 @@ export class Painel {
         ['Data do retorno', 'data', (r) => r.p.dataRetorno || ''],
         ['Motivo do retorno', 'txt', (r) => this.txtOp('motivoRetorno', r.p.motivoRetorno || '')],
         ['Pedido do reenvio', 'txt', (r) => r.p.pedidoReenvio || ''],
+        ['Observação do retorno', 'txt', (r) => r.p.obsRetorno || ''],
         ['Volume', 'num', (r) => r.p.volume || ''],
         ['Espécie', 'txt', (r) => r.p.especie || ''],
         ['Peso líquido', 'num', (r) => r.p.pesoLiquido || ''],
@@ -1605,6 +1730,8 @@ export class Painel {
             ] as [string, 'txt' | 'num' | 'data', (r: Reg) => string | number][])),
         ['Cobrado − custo', 'num', (r) => (r.custo ? Math.round((r.cobrado - r.custo) * 100) / 100 : '')],
         ['Observações da entrega', 'txt', (r) => r.p.obsEntrega || ''],
+        ['Mensagem para a nota', 'txt', (r) => r.p.mensagemNota || ''],
+        ['Informação faltando', 'txt', (r) => r.pend.map((k) => PEND_TXT[k][1]).join(', ')],
       ];
       abas.push({ nome: 'Pedidos', tabela: 'Pedidos', colunas: col.map(([t, tipo]) => ({ t, tipo })), linhas: sel.map((r) => col.map(([, , f]) => f(r))) });
     }
@@ -1907,10 +2034,10 @@ export class Painel {
         out[k] = el.value.trim().toUpperCase();
         return;
       }
-      if (k === 'obsEntrega') {
+      if (OBS.includes(k)) {
         // campo caracter (tem tamanho): uma linha so; memo: mantem as quebras
         const txt = el.value.replace(/\r\n?/g, '\n').trim();
-        out[k] = this.resp?.tamanhos?.[CAMPO.obsEntrega] ? txt.replace(/\s*\n\s*/g, ' ') : txt;
+        out[k] = this.resp?.tamanhos?.[CAMPO[k]] ? txt.replace(/\s*\n\s*/g, ' ') : txt;
         return;
       }
       out[k] = el.value.trim();
@@ -1979,6 +2106,7 @@ export class Painel {
       pesoLiquido: p.pesoLiquido || 0,
       pesoBruto: p.pesoBruto || 0,
       obsEntrega: (p.obsEntrega || '').replace(/\r\n?/g, '\n').trim(),
+      obsRetorno: (p.obsRetorno || '').replace(/\r\n?/g, '\n').trim(),
     };
   }
 
@@ -2026,7 +2154,7 @@ export class Painel {
     const ret = v.dataRetorno || '';
     if (ret && !env) erros.push('Retorno só para pedido enviado: informe a data de envio.');
     if (ret && env && ret < env) erros.push(`O retorno (${fmt(ret)}) é anterior ao envio (${fmt(env)}).`);
-    if (!ret && RETORNO.some((k) => v[k])) erros.push('Motivo e pedido do reenvio só com a data do retorno.');
+    if (!ret && RETORNO.some((k) => v[k])) erros.push('Motivo, pedido do reenvio e observação do retorno só com a data do retorno.');
     if (v.pedidoReenvio && v.pedidoReenvio === p.pedido) erros.push('O pedido do reenvio tem que ser outro pedido.');
     if (ret && !v.pedidoReenvio) avisos.push('Sem o pedido do reenvio: fica em Retornados como "aguardando reenvio".');
     const tr = v.transportadora || '';
@@ -2159,16 +2287,13 @@ export class Painel {
     this.desenhar();
   }
 
+  /** Atualizar dados. O periodo saiu da tela em 23/11/2026 (pedido do usuario):
+   *  pedidos com NF emitidos de 01/01 do ano anterior ate hoje; sem NF, todos */
   private consultar(): void {
-    const de = dt((this.raiz.querySelector('#lg-de') as HTMLInputElement).value);
-    const ate = dt((this.raiz.querySelector('#lg-ate') as HTMLInputElement).value);
-    if (!de || !ate || de > ate) {
-      this.aviso('Período inválido.', true);
-      return;
-    }
-    this.e.de = de;
+    const ate = new Date();
+    ate.setHours(0, 0, 0, 0);
     this.e.ate = ate;
-    this.api.carregar(iso(de), iso(ate));
+    this.api.carregar(iso(this.e.de), iso(ate));
   }
 
   // ---------- Importacao por planilha ----------
@@ -2569,6 +2694,11 @@ export class Painel {
       if (ac) {
         const a = ac.dataset['acao'];
         if (a === 'consultar') this.consultar();
+        else if (a === 'filtro-global') {
+          const v = (ac.dataset['valor'] || '') as '' | 'pend' | 'hoje';
+          this.e.fGlobal = this.e.fGlobal === v ? '' : v;
+          this.desenhar();
+        }
         else if (a === 'diag') this.abrirDiagnostico();
         else if (a === 'importar') this.abrirImportar();
         else if (a === 'xlsx') this.abrirXlsx();
@@ -2691,6 +2821,13 @@ export class Painel {
     // Ordem dos quadros e campos da importacao
     raiz.addEventListener('change', (ev) => {
       const t = ev.target as HTMLInputElement;
+      const fq = t.dataset?.['filtroQuadro'] as Etapa | undefined;
+      if (fq) {
+        this.e.fQuadro[fq] = t.value;
+        this.e.limQuadro[fq] = LIMITE_CARTOES;
+        this.desenhar();
+        return;
+      }
       const oq = t.dataset?.['ordQuadro'] as Etapa | undefined;
       if (oq) {
         this.e.ordQuadro[oq] = t.value;

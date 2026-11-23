@@ -130,6 +130,15 @@ export interface Pedido {
   pedidoReenvio?: string;
   /** C5_ZOBS: observacoes da entrega (texto livre); API >= 2026-11-15b */
   obsEntrega?: string;
+  /** C5_ZOBSRET: observacao do retorno a empresa (campo novo); API >= 2026-11-23a */
+  obsRetorno?: string;
+  /** C5_MENNOTA: mensagem para a nota (so leitura); API >= 2026-11-23a */
+  mensagemNota?: string;
+  /** Endereco do cliente de entrega (A1_END, A1_COMPLEM, A1_BAIRRO, A1_CEP; A2_* na devolucao); API >= 2026-11-23a */
+  enderecoEntrega?: string;
+  complementoEntrega?: string;
+  bairroEntrega?: string;
+  cepEntrega?: string;
   /** Cobrancas de frete (ZLC); so com a tabela criada (API >= 2026-11-19a) */
   custos?: Custo[];
   /** Gravou, mas o historico (ZLH) falhou */
@@ -186,6 +195,8 @@ export interface PedidoEdicao {
   pesoLiquido?: number;
   pesoBruto?: number;
   obsEntrega?: string;
+  /** C5_ZOBSRET: so com a data do retorno (API >= 2026-11-23a) */
+  obsRetorno?: string;
 }
 
 @Injectable({ providedIn: 'root' })

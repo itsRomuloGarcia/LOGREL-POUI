@@ -19,7 +19,7 @@ Faça tudo **fora do expediente**, nesta ordem. A homologação já está funcio
 1. Compile `COMPAT/LOGRELUPD.prw` na produção.
 2. Rode `U_LOGRELUPD` pelo menu, com ninguém usando pedidos de venda, e escolha **Importar**.
 3. Escolha o arquivo `.json` e confira a prévia. Ela deve mostrar:
-   - em "criar", os campos da logística que faltam (até 17);
+   - em "criar", os campos da logística que faltam (até 18; o `C5_ZOBSRET`, observação do retorno, entrou em 23/11/2026);
    - `C5_ZFRETE` em "já existem iguais", porque a tela de pedidos já usa esse campo;
    - a pasta 3 com um nome que faça sentido na tela de pedidos.
 
@@ -60,12 +60,30 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 
 ## O que a tela faz
 
-**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e o período da consulta ao Protheus (emissão dos pedidos com NF), e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
+**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
 
 **Exportar XLSX:** abre uma janela para escolher o que sai na planilha: todos os pedidos, previstos, faturados aguardando saída, enviados (em trânsito), entregues, atrasados (em trânsito e entregues com atraso), retornados ou com custo de frete em divergência, cada um com a contagem. Dá para aplicar ou não os filtros do topo e escolher as abas: **Pedidos** (uma linha por pedido, com todos os dados de logística e frete), **Itens** (uma linha por item, com NF e números de série) e **Custos de frete** (uma linha por cobrança). Cada aba sai como tabela do Excel, fonte Tahoma 10, com datas e valores como data e número. O gerador (`xlsx.ts`) é o mesmo do RX Pedidos, já usado dentro do Protheus. A Lista completa continua com o CSV. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
+O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela carrega os pedidos com NF emitidos de 01/01 do ano anterior até hoje, e todos os sem NF; **Atualizar dados** repete a consulta com a data de hoje.
+
 **Abas:**
-- **Quadros:** as colunas das etapas, com cartões de alerta no topo (em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio, custo de frete em divergência). O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
+- **Quadros:** as colunas das etapas, com cartões de alerta no topo. Os dois primeiros filtram os quadros ao clicar (23/11/2026); clicar de novo, ou em "Mostrar todos", tira o filtro:
+  - **Com informação faltando:** pedidos com algo para completar (lista abaixo);
+  - **Saíram hoje:** pedidos com data de envio de hoje, com unidades e transportadoras.
+
+  Cada coluna também tem um **filtro próprio**, abaixo do seletor de ordem: "Com informação faltando" ou uma informação específica (só aparecem as opções que têm pedido, com a contagem). O cartão ganha o selo amarelo **Falta …**, e a lista completa aparece ao passar o mouse. Com filtro ligado, os Entregues antigos também aparecem, porque é neles que costuma faltar informação.
+
+  | Quadro | Informação faltando |
+  |---|---|
+  | Previstos | transportadora, volume, espécie, peso líquido ou bruto |
+  | Faturados | data de envio, quando a NF tem mais de 2 dias |
+  | Enviados | previsão de entrega; data de entrega, com a previsão vencida; nova data da reentrega; CTE do envio; tipo de material; indicador de atraso, quando atrasado |
+  | Entregues | previsão de entrega, CTE do envio, tipo de material, indicador de atraso, quando atrasado |
+  | Retornados | motivo do retorno, pedido do reenvio |
+
+  Campo que não existe no ambiente não conta. Transportadora, volume, espécie e pesos só contam nos Previstos: com NF eles já saíram no documento e não são alterados pela tela.
+
+  Os outros cartões de alerta: em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio, custo de frete em divergência). O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
 - **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue".
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
@@ -82,11 +100,14 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 - tipo de material;
 - reentrega e indicador de atraso;
 - observações da entrega (`C5_ZOBS`), texto livre;
-- retorno: data, motivo e pedido do reenvio.
+- retorno: data, motivo, pedido do reenvio e **observação do retorno** (`C5_ZOBSRET`, texto livre, desde 23/11/2026; só com a data do retorno).
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
-Em "Cliente e pedido" fica o **telefone** do cadastro (cliente de entrega e, se for outro, o cliente do pedido), com link para discar.
+Em "Cliente e pedido" ficam:
+- o **telefone** do cadastro (cliente de entrega e, se for outro, o cliente do pedido), com link para discar;
+- o **endereço de entrega** (rua, complemento, bairro, cidade/UF e CEP do cliente de entrega; fornecedor na devolução e no beneficiamento), desde 23/11/2026;
+- a **mensagem para a nota** (`C5_MENNOTA`), só para leitura, desde 23/11/2026.
 
 Dois blocos de frete e histórico:
 - **Custos de frete**, logo abaixo de "Envio e entrega" e sempre visível (pedido do usuário em 19/11/2026): a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
@@ -118,6 +139,8 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZMOTRET` | Motivo do retorno (combo: 1=Recusa, 2=Endereço, 3=Avaria, 4=Outros) | só com data do retorno |
 | `C5_ZPEDREN` | Pedido do reenvio (o novo pedido que leva a mercadoria de novo) | só com data do retorno |
 | `C5_ZOBS` | Observações da entrega (texto livre; caracter ou memo) | sim |
+| `C5_ZOBSRET` | Observação do retorno à empresa (campo novo de 23/11/2026; sugestão: caracter 250, pasta 3) | só com data do retorno |
+| `C5_MENNOTA` | Mensagem para a nota (padrão do Protheus) | não |
 | `C5_TRANSP`, `C5_VOLUME1`, `C5_ESPECI1`, `C5_PESOL`, `C5_PBRUTO` | Transportadora, volume, espécie, peso líquido, peso bruto | só antes da NF |
 | `C5_FRETE`, `C5_ZFRETE` | Frete destacado, frete não destacado | só consulta (desde 15/11/2026) |
 | `C5_ZTPPEDI` | Tipo de pedido | não |
@@ -252,7 +275,7 @@ Os campos `C5_Z*` foram criados à mão na homologação. O `U_LOGRELUPD` copia 
    - campos que já existem com outro tipo ou tamanho, que **não são alterados**.
    Confirmado, ele cria os campos que faltam no fim da SC5 (`X3_ORDEM` novo), cria os gatilhos que faltam e roda o `X31UpdTable("SC5")`. Depois confere as colunas no banco.
 
-   Só cria os 17 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
+   Só cria os 18 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
 3. Todos saem e entram de novo no Protheus. Depois disso, publique a API e a tela na produção.
 
 A opção **Tabelas** do mesmo `U_LOGRELUPD` cria a ZLC e a ZLH e faz a carga inicial dos CTEs (veja o passo 1b da implantação).

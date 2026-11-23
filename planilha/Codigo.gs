@@ -210,9 +210,44 @@ function montar_(p, ctx) {
       .filter((c) => c.valorEsperado > 0)
       .reduce((s, c) => s + (c.valor - c.valorEsperado), 0),
     ctes: cus ? cus.map((c) => c.cte).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean),
+    pend: pendencias_(p, et, prazo, ctx),
     qtd: itens.reduce((s, i) => s + (i.quantidade || 0), 0),
     valor: itens.reduce((s, i) => s + (i.valor || 0), 0),
   };
+}
+
+// O que falta preencher no pedido: igual ao pendencias() da tela (23/11/2026).
+// Campo que nao existe no ambiente (camposFaltando) nao conta.
+const PEND_TXT = {
+  transp: "transportadora", volume: "volume", especie: "espécie", peso: "peso",
+  envio: "data de envio", previsao: "previsão de entrega", entrega: "data de entrega",
+  novaData: "nova data de entrega", cte: "CTE do envio", tpmat: "tipo de material",
+  indicador: "indicador de atraso", motivo: "motivo do retorno", reenvio: "pedido do reenvio",
+};
+function pendencias_(p, et, prazo, ctx) {
+  const falta = ctx.resp.camposFaltando || [];
+  const tem = (c) => falta.indexOf(c) < 0;
+  const out = [];
+  if (et === "prev") {
+    if (!p.transportadora) out.push("transp");
+    if (tem("C5_VOLUME1") && !p.volume) out.push("volume");
+    if (tem("C5_ESPECI1") && !p.especie) out.push("especie");
+    if ((tem("C5_PESOL") && !p.pesoLiquido) || (tem("C5_PBRUTO") && !p.pesoBruto)) out.push("peso");
+  }
+  if (et === "fat" && tem("C5_ZDTENV") && p.dataFaturamento && dias_(dt_(p.dataFaturamento), ctx.hoje) > DIAS_FAT_PARADO) out.push("envio");
+  if (et === "env" || et === "ent") {
+    if (prazo === "semprev" && tem("C5_ZDTPREV")) out.push("previsao");
+    if (et === "env" && prazo === "atrasado" && tem("C5_ZDTENTR")) out.push("entrega");
+    if (et === "env" && p.reentrega === "SIM" && !p.dataNovaEntrega) out.push("novaData");
+    if (ctx.temCustos ? !(p.custos || []).some((c) => c.tipo === "E") : tem("C5_ZCTE") && !p.cte) out.push("cte");
+    if (tem("C5_ZTPMAT") && !p.tipoMaterial) out.push("tpmat");
+    if (prazo === "atrasado" && tem("C5_ZINDICA") && !p.indicador) out.push("indicador");
+  }
+  if (et === "ret") {
+    if (tem("C5_ZMOTRET") && !p.motivoRetorno) out.push("motivo");
+    if (tem("C5_ZPEDREN") && !p.pedidoReenvio) out.push("reenvio");
+  }
+  return out;
 }
 
 function txtOp_(ctx, k, cod) {
@@ -251,6 +286,9 @@ function colunasPedidos_(ctx) {
     ["UF", "gen", (r) => r.p.uf],
     ["Telefone (entrega)", "txt", (r) => r.p.telefone || ""],
     ["Telefone (cliente do pedido)", "txt", (r) => r.p.telefoneCliente || ""],
+    ["Endereço de entrega", "gen", (r) => [r.p.enderecoEntrega, r.p.complementoEntrega].filter(Boolean).join(" - ")],
+    ["Bairro", "gen", (r) => r.p.bairroEntrega || ""],
+    ["CEP", "txt", (r) => r.p.cepEntrega || ""],
     ["Vendedor", "gen", (r) => r.p.vendedor],
     ["Cód. transportadora", "txt", (r) => r.p.transportadora],
     ["Transportadora", "gen", (r) => r.p.transportadoraNome],
@@ -268,6 +306,7 @@ function colunasPedidos_(ctx) {
     ["Data do retorno", "data", (r) => r.p.dataRetorno || ""],
     ["Motivo do retorno", "gen", (r) => txtOp_(ctx, "motivoRetorno", r.p.motivoRetorno || "")],
     ["Pedido do reenvio", "txt", (r) => r.p.pedidoReenvio || ""],
+    ["Observação do retorno", "gen", (r) => r.p.obsRetorno || ""],
     ["Volume", "int", (r) => r.p.volume || ""],
     ["Espécie", "gen", (r) => r.p.especie || ""],
     ["Peso líquido", "peso", (r) => r.p.pesoLiquido || ""],
@@ -298,6 +337,8 @@ function colunasPedidos_(ctx) {
     .concat([
       ["Cobrado − custo", "moeda", (r) => (r.custo ? r2_(r.cobrado - r.custo) : "")],
       ["Observações da entrega", "gen", (r) => r.p.obsEntrega || ""],
+      ["Mensagem para a nota", "gen", (r) => r.p.mensagemNota || ""],
+      ["Informação faltando", "gen", (r) => r.pend.map((k) => PEND_TXT[k]).join(", ")],
     ]);
   return primeiro_(lista, PRIMEIRAS_PEDIDOS);
 }
@@ -497,6 +538,8 @@ function gravarResumo_(regs, ctx) {
       conta((r) => r.et === "fat" && r.p.dataFaturamento && dias_(dt_(r.p.dataFaturamento), ctx.hoje) > DIAS_FAT_PARADO),
     ],
     ["Retornados aguardando reenvio", conta((r) => r.et === "ret" && !r.p.pedidoReenvio)],
+    ["Pedidos com informação faltando (coluna Informação faltando)", conta((r) => r.pend.length > 0)],
+    ["Saíram hoje", conta((r) => r.p.dataEnvio === hojeIso)],
   ];
   if (ctx.temCustos) kpis.push(["Pedidos com cobrança de frete em divergência", conta((r) => r.nDiv > 0)]);
   let linha = 4;
