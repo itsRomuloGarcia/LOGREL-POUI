@@ -269,6 +269,7 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - **24/11/2026 (2ª), ajustes visuais pedidos pelo usuário com print:**
   - a caixa "Sem CTE" saía gigante, porque herdava o `.grupo-f .campo input { width: 100% }`; agora tem regra própria (`label.check-sem-cte`, caixa de 16 px);
   - o selo da etapa (`.pill.etapa`, na gaveta e no quadro Enviados hoje) só tinha uma faixa de cor na lateral e parecia sem cor; agora é preenchido com a cor do quadro, com texto escuro (`#16202a`), que tem contraste suficiente nas 5 cores.
+- **24/11/2026 (3ª):** o usuário buscou um pedido entregue e ele só aparecia na Lista completa. O quadro Entregues cortava em `DIAS_ENTREGUES` (30 dias) mesmo com a busca preenchida. Agora, com texto na busca, o corte não vale (testado com a API falsa: o pedido entregue em 07/10 aparece com a busca e some sem ela).
 
 ## Pendências
 - **24/11/2026:** compilar o `logrel.app` novo (Sem CTE, pendência de CTE e atualização automática) na homologação e colar o `planilha/Codigo.gs` novo no Apps Script, porque a regra da pendência de CTE mudou.

@@ -884,8 +884,10 @@ export class Painel {
       const total = lista.length;
       const qtd = lista.reduce((s, r) => s + r.qtd, 0);
       let ocultosEnt = 0;
-      // com filtro ligado os entregues antigos aparecem: e la que falta informacao
-      if (et.id === 'ent' && !this.e.entTodos && !fq && !g) {
+      // com filtro ligado os entregues antigos aparecem: e la que falta informacao.
+      // Com texto na busca tambem (24/11/2026): o pedido buscado tem que aparecer
+      // no quadro, mesmo entregue ha mais de DIAS_ENTREGUES dias
+      if (et.id === 'ent' && !this.e.entTodos && !fq && !g && !this.e.busca.trim()) {
         const recentes = lista.filter((r) => (dt(r.entFinal) as Date) >= limEnt);
         ocultosEnt = lista.length - recentes.length;
         lista = recentes;
