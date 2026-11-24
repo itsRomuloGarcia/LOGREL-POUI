@@ -256,7 +256,12 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 
 ## Pendências
 - **23/11/2026:**
-  1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). **Falta compilar o `logrel.app` da 2ª rodada de 23/11** (coluna Enviados hoje, cartões que filtram, filtro do Não saíram). Na homologação não há pedido retornado: a observação do retorno só pode ser testada depois que o usuário lançar um retorno.
+  1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). O `logrel.app` da 2ª rodada (coluna Enviados hoje, cartões que filtram, filtro do Não saíram) também foi **compilado pelo usuário em 23/11**. Números esperados na tela, calculados pela API às 21:45 com as regras da tela:
+     - cartões: informação faltando 510, saíram hoje 3 (000372, 000587, 000591, marcados "Saiu" no teste), em trânsito atrasados 1, faturados parados 96, sem previsão 3, sem dados para a NF-e 176;
+     - colunas: Previstos 102, Faturados 96, Enviados 7, Enviados hoje 3, Entregues 2.635;
+     - Programação: saem hoje 3, não saíram 167, com NF sem programação 3.
+
+     A conferência visual fica com o usuário. Na homologação não há pedido retornado: a observação do retorno só pode ser testada depois que o usuário lançar um retorno.
   2. Conferir: gravar e alterar uma observação de retorno (aparece no Histórico); endereço e C5_MENNOTA na gaveta.
   3. Produção: criar o `ZLH_OBS` igual ao da homologação e depois compilar os mesmos fontes.
   5. Colar o `planilha/Codigo.gs` novo no Apps Script.
