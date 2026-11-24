@@ -35,6 +35,18 @@ O usuário quer adaptar isso ao que já existe.
 | 1. Registrar a remessa do sistema antigo | **MATA920** (NF de saída manual, sem pedido de venda) | A NF de saída emitida pela ATM no ERP antigo | tipo N; formulário próprio = sim; número, série e **data da NF antiga**; cliente; espécie SPED; item, quantidade, **TES 906 / CFOP 6908** (remessa de bem em comodato ou locação) |
 | 2. Entrada de retorno feita pela empresa | **MATA910** (NF de entrada manual) | NF de entrada **emitida pela empresa**, que também **acompanha o transporte** | tipo **Devolução**; formulário próprio = sim; número automático; data de emissão = hoje; mesmo cliente e espécie; mesmo item; **TES 456 / CFOP 2909** (retorno de bem em comodato ou locação); **Docto. Orig. (`D1_NFORI`) = NF do passo 1** |
 
+**Quando a remessa saiu pelo Protheus e o cliente emite a NF de devolução (usuário, 24/11/2026):**
+
+| Rotina | Dados |
+|---|---|
+| **MATA103** (documento de entrada) | tipo **Devolução**; formulário próprio = **não**; número, série e data de emissão **da NF do cliente**; cliente; na linha, o produto da NF, **amarrado à NF de saída do Protheus** (`D1_NFORI`/`D1_SERIORI`/`D1_ITEMORI`). TES não informada (a conferir no diagnóstico; provavelmente a 456 / CFOP 1909/2909). |
+
+Então a entrada de retorno tem dois caminhos, e os dois levam à NF de remessa pelo mesmo vínculo:
+- **MATA103:** NF do cliente, formulário próprio = não.
+- **MATA910:** entrada própria, formulário próprio = sim, emitida na coleta e acompanhando o transporte.
+
+**Datas da MATA103:** a emissão (`F1_EMISSAO`) é a da NF do cliente, ou seja, quando a mercadoria saiu de lá (coleta). A digitação (`F1_DTDIGIT`) tende a ser a chegada. Se o diagnóstico confirmar, nesse caso a reversa já sai com "coletada" e "recebida" sem digitação. Na MATA910, a chegada continua dependendo de a logística confirmar.
+
 **O que isso muda no desenho:**
 - **A hipótese da manhã de 24/11 estava errada.** A NF do passo 1 vem da MATA920, que **não tem pedido de venda**. Então ela não aparece na tela de saídas, que parte da SC5/SC6, e não está nos "Faturados parados". A conferir no diagnóstico.
 - **Regra para achar a reversa:** CFOP **x908** (5908/6908) = remessa de comodato ou locação; **x909** (1909/2909) = retorno. A entrada x909 aponta a remessa x908 pelo `D1_NFORI`/`D1_SERIORI`. Vale para as remessas antigas (MATA920, sem pedido) e para as de 2026 (pedido de venda).
@@ -92,7 +104,8 @@ O usuário quer adaptar isso ao que já existe.
 - Pode haver retorno parcial (só parte dos equipamentos)?
 - ~~Quem lança a NF de entrada do retorno, e ela é lançada informando a NF de saída original?~~ Respondido em 24/11: sempre vinculada à NF de saída (do cliente ou entrada própria).
 - ~~Confirmar a saída das locações antigas~~ Respondido em 24/11: MATA920, TES 906 / CFOP 6908, com os dados da NF antiga.
-- Quando o cliente emite a NF de devolução: a entrada é pela MATA910 ou pelo documento de entrada (MATA103)? Com a TES 456?
+- ~~Quando o cliente emite a NF de devolução, qual rotina?~~ Respondido em 24/11: MATA103 (Devolução, formulário próprio = não, dados da NF do cliente, item amarrado à NF de saída). Falta a TES usada.
+- Combinações cruzadas existem? Remessa antiga (MATA920) com NF do cliente (MATA103), ou remessa do Protheus com entrada própria (MATA910)?
 - Remessas feitas no Protheus em 2026: pedido de venda com qual TES (também a 906)?
 - Na chegada do equipamento existe algum registro no Protheus (conferência, transferência de armazém), ou só a logística sabe?
 - Depois que o equipamento chega, existe conferência técnica (armazém de conserto) que a logística acompanha, ou "recebido" encerra?
