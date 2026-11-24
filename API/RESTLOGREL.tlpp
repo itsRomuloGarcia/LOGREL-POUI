@@ -111,6 +111,9 @@
 //     "origem": "importacao" no corpo marca a linha como importacao.
 //   So rotas no formato das que ja existem (GET com query, POST simples).
 //
+// LOGISTICA REVERSA (2026-11-24a): GET /logistica/reversa/diagnostico, so
+// leitura, antes de desenhar a aba Reversa. Detalhe no bloco da rota.
+//
 // Acesso: SEM a trava U_VSAPIACE/MV_VSAPUSR desde 2026-11-18a, por pedido do
 // usuario (18/11/2026). Quem abre a tela pelo menu (U_LOGRELAPP) usa a API.
 // Nao depende mais do VSACESSO.tlpp.
@@ -119,7 +122,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-23b"
+#define LG_VERSAO     "2026-11-24a"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -2292,6 +2295,376 @@ Static Function TxtIn(xV)
    cV := xV
    cD := DecodeUTF8(cV)
 Return IIf(ValType(cD) == "C", cD, cV)
+
+// ============================================================================
+// LOGISTICA REVERSA - DIAGNOSTICO (SO LEITURA, 2026-11-24a)
+// GET /api/v1/vs-financial-data/logistica/reversa/diagnostico[?meses=24]
+// Levantamento antes de desenhar a aba Reversa (pedido do usuario, 24/11/2026;
+// ver IDEIAS-REVERSA-E-CTE.md). Nada e gravado. Escopo: locacao e comodato.
+//   - tes: TES 607/906/456/610 e as de CFOP x908/x909 (estoque, poder de terceiros)
+//   - retornosPorMes: entradas de retorno (CFOP x909 ou TES 456) por mes de
+//     digitacao x formulario proprio x origem do lancamento x TES x armazem x
+//     NF de origem preenchida x movimento de estoque (D1_NUMSEQ)
+//   - retornoXRemessa: se a entrada aponta a remessa (D1_NFORI) e como a
+//     remessa foi feita (com pedido = Protheus; sem pedido = MATA920), dias
+//   - retornosRecentes: as 40 ultimas entradas de retorno, linha a linha
+//   - remessasPorMes: saidas x908 ou TES 607/906 (sem filtro de data: as do ERP
+//     antigo entram com a data da NF antiga)
+//   - equipamentosNoCliente / clientesComEquipamento: remessa x908 menos o que
+//     voltou pelo D1_NFORI (saldo no cliente)
+//   - freteLocCom: pedidos LOC/COM (C5_ZTPPEDI) com frete
+//   - ctesPorMes / ctesPorTransportadora / ctesTesCfop / ctesRecentes: CTEs de
+//     entrada (F1_ESPECIE CT*) e ctesXZlc: CTEs da ZLC achados no fiscal
+//   - tabelasXml: tabelas de XML/importador (CKO, SDS, SDT, C00) e linhas
+//   - armazens (NNR) dos retornos; tabelasZ (nomes Z em uso)
+// Cada secao roda separada (erro vai para "erros"). Colunas opcionais so entram
+// depois de achadas no ALL_TAB_COLUMNS: coluna inexistente derruba a thread.
+// ============================================================================
+@Get("/api/v1/vs-financial-data/logistica/reversa/diagnostico")
+User Function getVsLogRevDiag() as Logical
+Return DiagReversa()
+
+Static Function DiagReversa()
+   Local jQuery  := oRest:getQueryRequest()
+   Local jResp   := JsonObject():New()
+   Local jRet    := Nil
+   Local bErrOld := ErrorBlock({|oE| Break(oE) })
+   Local oErr    := Nil
+   Local aErros  := {}
+   Local nMeses  := 24
+   Local cDesde  := ""
+   Local cSuf    := ""
+   Local cSD1    := RetSqlName("SD1")
+   Local cSF1    := RetSqlName("SF1")
+   Local cSD2    := RetSqlName("SD2")
+   Local cSF4    := RetSqlName("SF4")
+   Local cSA1    := RetSqlName("SA1")
+   Local cSA2    := RetSqlName("SA2")
+   Local cSC5    := RetSqlName("SC5")
+   Local cFD1    := FWxFilial("SD1")
+   Local cFF1    := FWxFilial("SF1")
+   Local cFD2    := FWxFilial("SD2")
+   Local cFF4    := FWxFilial("SF4")
+   Local cFA1    := FWxFilial("SA1")
+   Local cFA2    := FWxFilial("SA2")
+   Local cFC5    := FWxFilial("SC5")
+   Local cExD1   := ""
+   Local cExD2   := ""
+   Local cExF1   := ""
+   Local cExF4   := ""
+   Local cExC5   := ""
+   Local cFalta  := ""
+   Local cOriD1  := ""
+   Local cOriD2  := ""
+   Local cItOri  := ""
+   Local cItOriR := ""
+   Local cNumSeq := ""
+   Local cChave  := ""
+   Local cPod3   := ""
+   Local cTpPed  := ""
+   Local cRetF   := ""
+   Local cRetJ   := ""
+   Local cRemF   := ""
+   Local cRemJ   := ""
+   Local cVolta  := ""
+   Local cSaldo  := ""
+   Local cDias   := ""
+   Local cCteF   := ""
+   Local cTabs   := ""
+   Local aXml    := {}
+   Local aAchou  := {}
+   Local jXml    := Nil
+   Local nI      := 0
+
+   oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
+   oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
+
+   Begin Sequence
+      If ValType(jQuery) == "J" .or. ValType(jQuery) == "O"
+         nMeses := NNum(jQuery["meses"])
+      EndIf
+      If nMeses <= 0
+         nMeses := 24
+      EndIf
+      nMeses := Min(nMeses, 60)
+      cDesde := Left(DToS(Date() - (nMeses * 30)), 6) + "01"
+      cSuf   := SubStr(AllTrim(cSD1), 4)
+
+      jResp["versao"]   := LG_VERSAO
+      jResp["empresa"]  := TxtOut(cEmpAnt)
+      jResp["filial"]   := TxtOut(cFilAnt)
+      jResp["desde"]    := cDesde
+      jResp["geradoEm"] := DToS(Date()) + " " + Time()
+
+      // colunas: as obrigatorias sao padrao; as opcionais viram ' '
+      cExD1 := ColunasDe("SD1")
+      cExD2 := ColunasDe("SD2")
+      cExF1 := ColunasDe("SF1")
+      cExF4 := ColunasDe("SF4")
+      cExC5 := ColunasDe("SC5")
+      cFalta := Faltam(cExD1, {"D1_FILIAL", "D1_DOC", "D1_SERIE", "D1_FORNECE", "D1_LOJA", "D1_ITEM", "D1_COD", ;
+         "D1_QUANT", "D1_TOTAL", "D1_TES", "D1_CF", "D1_LOCAL", "D1_NFORI", "D1_SERIORI", "D1_DTDIGIT"}) + ;
+         Faltam(cExD2, {"D2_FILIAL", "D2_DOC", "D2_SERIE", "D2_CLIENTE", "D2_LOJA", "D2_ITEM", "D2_COD", ;
+         "D2_QUANT", "D2_TES", "D2_CF", "D2_EMISSAO", "D2_PEDIDO"}) + ;
+         Faltam(cExF1, {"F1_FILIAL", "F1_DOC", "F1_SERIE", "F1_FORNECE", "F1_LOJA", "F1_FORMUL", "F1_TIPO", ;
+         "F1_ESPECIE", "F1_EMISSAO", "F1_DTDIGIT", "F1_VALBRUT"}) + ;
+         Faltam(cExF4, {"F4_FILIAL", "F4_CODIGO", "F4_TIPO", "F4_CF", "F4_ESTOQUE", "F4_DUPLIC", "F4_TEXTO"})
+      If !Empty(cFalta)
+         aAdd(aErros, "colunas padrao que faltam (secoes puladas): " + cFalta)
+         jResp["erros"] := aErros
+         jRet := oRest:setStatusResponse(200, jResp:ToJson())
+         Break
+      EndIf
+      cOriD1  := IIf("|D1_ORIGLAN|" $ cExD1, "SD1.D1_ORIGLAN", "' '")
+      cOriD2  := IIf("|D2_ORIGLAN|" $ cExD2, "SD2.D2_ORIGLAN", "' '")
+      cNumSeq := IIf("|D1_NUMSEQ|" $ cExD1, "CASE WHEN SD1.D1_NUMSEQ <> ' ' THEN 'S' ELSE 'N' END", "'?'")
+      cChave  := IIf("|F1_CHVNFE|" $ cExF1, "CASE WHEN SF1.F1_CHVNFE <> ' ' THEN 'S' ELSE 'N' END", "'?'")
+      cPod3   := IIf("|F4_PODER3|" $ cExF4, "SF4.F4_PODER3", "' '")
+      cTpPed  := IIf("|C5_ZTPPEDI|" $ cExC5, "SC5.C5_ZTPPEDI", "' '")
+      If "|D1_ITEMORI|" $ cExD1
+         cItOri  := " AND (SD1.D1_ITEMORI = ' ' OR SD1.D1_ITEMORI = SD2.D2_ITEM)"
+         cItOriR := " AND (R.D1_ITEMORI = ' ' OR R.D1_ITEMORI = SD2.D2_ITEM)"
+      EndIf
+      jResp["colunasOpcionais"] := { ;
+         "D1_ORIGLAN=" + IIf("|D1_ORIGLAN|" $ cExD1, "S", "N"), "D2_ORIGLAN=" + IIf("|D2_ORIGLAN|" $ cExD2, "S", "N"), ;
+         "D1_NUMSEQ=" + IIf("|D1_NUMSEQ|" $ cExD1, "S", "N"), "D1_ITEMORI=" + IIf("|D1_ITEMORI|" $ cExD1, "S", "N"), ;
+         "F1_CHVNFE=" + IIf("|F1_CHVNFE|" $ cExF1, "S", "N"), "F4_PODER3=" + IIf("|F4_PODER3|" $ cExF4, "S", "N"), ;
+         "C5_ZTPPEDI=" + IIf("|C5_ZTPPEDI|" $ cExC5, "S", "N")}
+
+      // ---------- TES ----------
+      jResp["tes"] := DiagLinhas("tes", ;
+         "SELECT SF4.F4_CODIGO AS TES, SF4.F4_TIPO AS TIPO, SF4.F4_CF AS CFOP, SF4.F4_ESTOQUE AS ESTOQUE, " + ;
+         "SF4.F4_DUPLIC AS DUPLIC, " + cPod3 + " AS PODER3, SF4.F4_TEXTO AS TEXTO FROM " + cSF4 + " SF4 " + ;
+         "WHERE SF4.F4_FILIAL = '" + cFF4 + "' AND SF4.D_E_L_E_T_ = ' ' AND (SF4.F4_CODIGO IN ('607','906','456','610') " + ;
+         "OR SUBSTR(SF4.F4_CF, 2, 3) IN ('908','909')) ORDER BY 1", aErros)
+
+      // ---------- entradas de retorno (x909 ou TES 456) ----------
+      cRetJ := " FROM " + cSD1 + " SD1 INNER JOIN " + cSF1 + " SF1 ON SF1.F1_FILIAL = SD1.D1_FILIAL AND SF1.F1_DOC = SD1.D1_DOC " + ;
+         "AND SF1.F1_SERIE = SD1.D1_SERIE AND SF1.F1_FORNECE = SD1.D1_FORNECE AND SF1.F1_LOJA = SD1.D1_LOJA AND SF1.D_E_L_E_T_ = ' ' " + ;
+         "LEFT JOIN " + cSF4 + " SF4 ON SF4.F4_FILIAL = '" + cFF4 + "' AND SF4.F4_CODIGO = SD1.D1_TES AND SF4.D_E_L_E_T_ = ' ' "
+      cRetF := " WHERE SD1.D1_FILIAL = '" + cFD1 + "' AND SD1.D_E_L_E_T_ = ' ' AND SD1.D1_DTDIGIT >= '" + cDesde + "' " + ;
+         "AND (SUBSTR(SD1.D1_CF, 2, 3) = '909' OR SD1.D1_TES = '456') "
+      jResp["retornosPorMes"] := DiagLinhas("retornosPorMes", ;
+         "SELECT SUBSTR(SD1.D1_DTDIGIT, 1, 6) AS MES, SF1.F1_FORMUL AS FORMUL, SF1.F1_TIPO AS TIPO, SF1.F1_ESPECIE AS ESPECIE, " + ;
+         cOriD1 + " AS ORIGLAN, SD1.D1_TES AS TES, SD1.D1_CF AS CFOP, SF4.F4_ESTOQUE AS TES_ESTOQUE, " + ;
+         cNumSeq + " AS MOVIMENTO, SD1.D1_LOCAL AS ARMAZEM, " + ;
+         "CASE WHEN SD1.D1_NFORI <> ' ' THEN 'S' ELSE 'N' END AS TEM_NFORI, " + ;
+         "COUNT(DISTINCT SD1.D1_DOC || SD1.D1_SERIE || SD1.D1_FORNECE) AS NFS, COUNT(*) AS ITENS, SUM(SD1.D1_QUANT) AS QUANT" + ;
+         cRetJ + cRetF + ;
+         "GROUP BY SUBSTR(SD1.D1_DTDIGIT, 1, 6), SF1.F1_FORMUL, SF1.F1_TIPO, SF1.F1_ESPECIE, " + cOriD1 + ", SD1.D1_TES, " + ;
+         "SD1.D1_CF, SF4.F4_ESTOQUE, " + cNumSeq + ", SD1.D1_LOCAL, CASE WHEN SD1.D1_NFORI <> ' ' THEN 'S' ELSE 'N' END " + ;
+         "ORDER BY 1, 2", aErros)
+
+      // remessa apontada pela entrada (D1_NFORI), com o pedido de origem
+      cRemJ := "LEFT JOIN " + cSD2 + " SD2 ON SD2.D2_FILIAL = '" + cFD2 + "' AND SD1.D1_NFORI <> ' ' " + ;
+         "AND SD2.D2_DOC = SD1.D1_NFORI AND SD2.D2_SERIE = SD1.D1_SERIORI AND SD2.D2_CLIENTE = SD1.D1_FORNECE " + ;
+         "AND SD2.D2_LOJA = SD1.D1_LOJA AND SD2.D2_COD = SD1.D1_COD AND SD2.D_E_L_E_T_ = ' '" + cItOri + " " + ;
+         "LEFT JOIN " + cSC5 + " SC5 ON SC5.C5_FILIAL = '" + cFC5 + "' AND SD2.D2_PEDIDO <> ' ' " + ;
+         "AND SC5.C5_NUM = SD2.D2_PEDIDO AND SC5.D_E_L_E_T_ = ' ' "
+      cDias := "CASE WHEN SD2.D2_EMISSAO <> ' ' AND SD1.D1_DTDIGIT <> ' ' THEN " + ;
+         "TO_DATE(SD1.D1_DTDIGIT, 'YYYYMMDD') - TO_DATE(SD2.D2_EMISSAO, 'YYYYMMDD') END"
+      cVolta := "CASE WHEN SD1.D1_NFORI = ' ' THEN '1-SEM NF ORIGEM' WHEN SD2.D2_DOC IS NULL THEN '2-REMESSA NAO ACHADA' " + ;
+         "WHEN SD2.D2_PEDIDO = ' ' THEN '3-REMESSA SEM PEDIDO' ELSE '4-REMESSA COM PEDIDO' END"
+      jResp["retornoXRemessa"] := DiagLinhas("retornoXRemessa", ;
+         "SELECT " + cVolta + " AS VINCULO, SF1.F1_FORMUL AS FORMUL, SD2.D2_TES AS TES_REM, SD2.D2_CF AS CFOP_REM, " + ;
+         cOriD2 + " AS ORIGLAN_REM, " + cTpPed + " AS TIPOPED, COUNT(*) AS ITENS, " + ;
+         "ROUND(AVG(" + cDias + "), 0) AS DIAS_MEDIO, MIN(" + cDias + ") AS DIAS_MIN, MAX(" + cDias + ") AS DIAS_MAX" + ;
+         cRetJ + cRemJ + cRetF + ;
+         "GROUP BY " + cVolta + ", SF1.F1_FORMUL, SD2.D2_TES, SD2.D2_CF, " + cOriD2 + ", " + cTpPed + " ORDER BY 1, 2", aErros)
+      jResp["retornosRecentes"] := DiagLinhas("retornosRecentes", ;
+         "SELECT * FROM (SELECT SD1.D1_DOC AS DOC, SD1.D1_SERIE AS SERIE, SD1.D1_FORNECE AS CLIENTE, SD1.D1_LOJA AS LOJA, " + ;
+         "SA1.A1_NOME AS NOME, SF1.F1_EMISSAO AS EMISSAO, SD1.D1_DTDIGIT AS DIGITACAO, SF1.F1_FORMUL AS FORMUL, " + ;
+         "SF1.F1_TIPO AS TIPO, SF1.F1_ESPECIE AS ESPECIE, " + cChave + " AS TEM_CHAVE, " + cOriD1 + " AS ORIGLAN, " + ;
+         cNumSeq + " AS MOVIMENTO, SD1.D1_ITEM AS ITEM, SD1.D1_COD AS PRODUTO, SD1.D1_QUANT AS QUANT, SD1.D1_TES AS TES, " + ;
+         "SD1.D1_CF AS CFOP, SD1.D1_LOCAL AS ARMAZEM, SD1.D1_NFORI AS NFORI, SD1.D1_SERIORI AS SERIORI, " + ;
+         "SD2.D2_EMISSAO AS EMISSAO_REM, SD2.D2_PEDIDO AS PEDIDO_REM, SD2.D2_TES AS TES_REM, SD2.D2_CF AS CFOP_REM, " + ;
+         cTpPed + " AS TIPOPED, " + cDias + " AS DIAS" + ;
+         cRetJ + cRemJ + ;
+         "LEFT JOIN " + cSA1 + " SA1 ON SA1.A1_FILIAL = '" + cFA1 + "' AND SA1.A1_COD = SD1.D1_FORNECE " + ;
+         "AND SA1.A1_LOJA = SD1.D1_LOJA AND SA1.D_E_L_E_T_ = ' ' " + ;
+         cRetF + "ORDER BY SD1.D1_DTDIGIT DESC, SD1.D1_DOC DESC, SD1.D1_ITEM) WHERE ROWNUM <= 40", aErros)
+
+      // ---------- remessas (x908 ou TES 607/906), sem filtro de data ----------
+      cRemF := " WHERE SD2.D2_FILIAL = '" + cFD2 + "' AND SD2.D_E_L_E_T_ = ' ' " + ;
+         "AND (SUBSTR(SD2.D2_CF, 2, 3) = '908' OR SD2.D2_TES IN ('607','906')) "
+      jResp["remessasPorMes"] := DiagLinhas("remessasPorMes", ;
+         "SELECT SUBSTR(SD2.D2_EMISSAO, 1, 6) AS MES, SD2.D2_TES AS TES, SD2.D2_CF AS CFOP, " + cOriD2 + " AS ORIGLAN, " + ;
+         "CASE WHEN SD2.D2_PEDIDO <> ' ' THEN 'S' ELSE 'N' END AS COM_PEDIDO, " + cTpPed + " AS TIPOPED, " + ;
+         "COUNT(DISTINCT SD2.D2_DOC || SD2.D2_SERIE) AS NFS, COUNT(*) AS ITENS, SUM(SD2.D2_QUANT) AS QUANT " + ;
+         "FROM " + cSD2 + " SD2 LEFT JOIN " + cSC5 + " SC5 ON SC5.C5_FILIAL = '" + cFC5 + "' AND SD2.D2_PEDIDO <> ' ' " + ;
+         "AND SC5.C5_NUM = SD2.D2_PEDIDO AND SC5.D_E_L_E_T_ = ' '" + cRemF + ;
+         "GROUP BY SUBSTR(SD2.D2_EMISSAO, 1, 6), SD2.D2_TES, SD2.D2_CF, " + cOriD2 + ", " + ;
+         "CASE WHEN SD2.D2_PEDIDO <> ' ' THEN 'S' ELSE 'N' END, " + cTpPed + " ORDER BY 1, 2", aErros)
+
+      // saldo no cliente = remessa x908 menos o que voltou apontando para ela
+      cSaldo := "SELECT SD2.D2_CLIENTE AS CLIENTE, SD2.D2_LOJA AS LOJA, SUBSTR(SD2.D2_EMISSAO, 1, 4) AS ANO, " + ;
+         "SD2.D2_TES AS TES, CASE WHEN SD2.D2_PEDIDO <> ' ' THEN 'S' ELSE 'N' END AS COM_PEDIDO, " + cTpPed + " AS TIPOPED, " + ;
+         "SD2.D2_EMISSAO AS EMISSAO, SD2.D2_QUANT AS QREM, " + ;
+         "NVL((SELECT SUM(R.D1_QUANT) FROM " + cSD1 + " R WHERE R.D1_FILIAL = '" + cFD1 + "' AND R.D_E_L_E_T_ = ' ' " + ;
+         "AND R.D1_NFORI = SD2.D2_DOC AND R.D1_SERIORI = SD2.D2_SERIE AND R.D1_FORNECE = SD2.D2_CLIENTE " + ;
+         "AND R.D1_LOJA = SD2.D2_LOJA AND R.D1_COD = SD2.D2_COD" + cItOriR + "), 0) AS QRET " + ;
+         "FROM " + cSD2 + " SD2 LEFT JOIN " + cSC5 + " SC5 ON SC5.C5_FILIAL = '" + cFC5 + "' AND SD2.D2_PEDIDO <> ' ' " + ;
+         "AND SC5.C5_NUM = SD2.D2_PEDIDO AND SC5.D_E_L_E_T_ = ' '" + cRemF
+      jResp["equipamentosNoCliente"] := DiagLinhas("equipamentosNoCliente", ;
+         "SELECT X.ANO, X.TES, X.COM_PEDIDO, X.TIPOPED, COUNT(*) AS ITENS, SUM(X.QREM) AS QTD_REMESSA, " + ;
+         "SUM(X.QRET) AS QTD_VOLTOU, SUM(CASE WHEN X.QRET >= X.QREM THEN 1 ELSE 0 END) AS ITENS_TOTAL, " + ;
+         "SUM(CASE WHEN X.QRET > 0 AND X.QRET < X.QREM THEN 1 ELSE 0 END) AS ITENS_PARCIAL, " + ;
+         "SUM(CASE WHEN X.QRET < X.QREM THEN X.QREM - X.QRET ELSE 0 END) AS SALDO_NO_CLIENTE " + ;
+         "FROM (" + cSaldo + ") X GROUP BY X.ANO, X.TES, X.COM_PEDIDO, X.TIPOPED ORDER BY 1, 2", aErros)
+      jResp["clientesComEquipamento"] := DiagLinhas("clientesComEquipamento", ;
+         "SELECT * FROM (SELECT X.CLIENTE, X.LOJA, MAX(SA1.A1_NOME) AS NOME, COUNT(*) AS ITENS, " + ;
+         "SUM(X.QREM - X.QRET) AS SALDO, MIN(X.EMISSAO) AS PRIMEIRA, MAX(X.EMISSAO) AS ULTIMA " + ;
+         "FROM (" + cSaldo + ") X LEFT JOIN " + cSA1 + " SA1 ON SA1.A1_FILIAL = '" + cFA1 + "' AND SA1.A1_COD = X.CLIENTE " + ;
+         "AND SA1.A1_LOJA = X.LOJA AND SA1.D_E_L_E_T_ = ' ' WHERE X.QRET < X.QREM " + ;
+         "GROUP BY X.CLIENTE, X.LOJA ORDER BY 5 DESC) WHERE ROWNUM <= 30", aErros)
+
+      // ---------- frete dos pedidos de locacao/comodato ----------
+      If "|C5_ZTPPEDI|" $ cExC5
+         jResp["freteLocCom"] := DiagLinhas("freteLocCom", ;
+            "SELECT SC5.C5_ZTPPEDI AS TIPOPED, SUBSTR(SC5.C5_EMISSAO, 1, 4) AS ANO, COUNT(*) AS PEDIDOS, " + ;
+            "SUM(CASE WHEN SC5.C5_FRETE > 0 THEN 1 ELSE 0 END) AS COM_FRETE, SUM(SC5.C5_FRETE) AS FRETE" + ;
+            IIf("|C5_ZFRETE|" $ cExC5, ", SUM(CASE WHEN SC5.C5_ZFRETE <> ' ' THEN 1 ELSE 0 END) AS COM_ZFRETE", "") + ;
+            " FROM " + cSC5 + " SC5 WHERE SC5.C5_FILIAL = '" + cFC5 + "' AND SC5.D_E_L_E_T_ = ' ' " + ;
+            "AND SC5.C5_ZTPPEDI IN ('LOC','COM') GROUP BY SC5.C5_ZTPPEDI, SUBSTR(SC5.C5_EMISSAO, 1, 4) ORDER BY 1, 2", aErros)
+      EndIf
+
+      // ---------- CTEs de entrada ----------
+      cCteF := " WHERE SF1.F1_FILIAL = '" + cFF1 + "' AND SF1.D_E_L_E_T_ = ' ' AND SF1.F1_DTDIGIT >= '" + cDesde + "' " + ;
+         "AND SF1.F1_ESPECIE LIKE 'CT%' "
+      jResp["ctesPorMes"] := DiagLinhas("ctesPorMes", ;
+         "SELECT SUBSTR(SF1.F1_DTDIGIT, 1, 6) AS MES, SF1.F1_ESPECIE AS ESPECIE, SF1.F1_TIPO AS TIPO, " + cChave + " AS TEM_CHAVE, " + ;
+         "COUNT(*) AS CTES, SUM(SF1.F1_VALBRUT) AS VALOR FROM " + cSF1 + " SF1" + cCteF + ;
+         "GROUP BY SUBSTR(SF1.F1_DTDIGIT, 1, 6), SF1.F1_ESPECIE, SF1.F1_TIPO, " + cChave + " ORDER BY 1, 2", aErros)
+      jResp["ctesPorTransportadora"] := DiagLinhas("ctesPorTransportadora", ;
+         "SELECT * FROM (SELECT SF1.F1_FORNECE AS FORNECEDOR, SF1.F1_LOJA AS LOJA, MAX(SA2.A2_NOME) AS NOME, " + ;
+         "MAX(SA2.A2_CGC) AS CNPJ, COUNT(*) AS CTES, SUM(SF1.F1_VALBRUT) AS VALOR FROM " + cSF1 + " SF1 " + ;
+         "LEFT JOIN " + cSA2 + " SA2 ON SA2.A2_FILIAL = '" + cFA2 + "' AND SA2.A2_COD = SF1.F1_FORNECE " + ;
+         "AND SA2.A2_LOJA = SF1.F1_LOJA AND SA2.D_E_L_E_T_ = ' '" + cCteF + ;
+         "GROUP BY SF1.F1_FORNECE, SF1.F1_LOJA ORDER BY 5 DESC) WHERE ROWNUM <= 25", aErros)
+      jResp["ctesTesCfop"] := DiagLinhas("ctesTesCfop", ;
+         "SELECT SD1.D1_TES AS TES, SD1.D1_CF AS CFOP, SF4.F4_TEXTO AS TEXTO, COUNT(*) AS ITENS, SUM(SD1.D1_TOTAL) AS VALOR" + ;
+         cRetJ + " WHERE SD1.D1_FILIAL = '" + cFD1 + "' AND SD1.D_E_L_E_T_ = ' ' AND SD1.D1_DTDIGIT >= '" + cDesde + "' " + ;
+         "AND SF1.F1_ESPECIE LIKE 'CT%' GROUP BY SD1.D1_TES, SD1.D1_CF, SF4.F4_TEXTO ORDER BY 4 DESC", aErros)
+      jResp["ctesRecentes"] := DiagLinhas("ctesRecentes", ;
+         "SELECT * FROM (SELECT SF1.F1_DOC AS DOC, SF1.F1_SERIE AS SERIE, SF1.F1_FORNECE AS FORNECEDOR, SA2.A2_NOME AS NOME, " + ;
+         "SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DIGITACAO, SF1.F1_ESPECIE AS ESPECIE, SF1.F1_VALBRUT AS VALOR, " + ;
+         cChave + " AS TEM_CHAVE FROM " + cSF1 + " SF1 LEFT JOIN " + cSA2 + " SA2 ON SA2.A2_FILIAL = '" + cFA2 + "' " + ;
+         "AND SA2.A2_COD = SF1.F1_FORNECE AND SA2.A2_LOJA = SF1.F1_LOJA AND SA2.D_E_L_E_T_ = ' '" + cCteF + ;
+         "ORDER BY SF1.F1_DTDIGIT DESC, SF1.F1_DOC DESC) WHERE ROWNUM <= 15", aErros)
+      If TemTab("ZLC")
+         // CTE da ZLC x CTE lancado no fiscal pelo numero sem zeros (todas as
+         // datas do fiscal; mesmo numero de transportadoras diferentes = 1 linha)
+         jResp["ctesXZlc"] := DiagLinhas("ctesXZlc", ;
+            "SELECT COUNT(*) AS LINHAS_ZLC, " + ;
+            "SUM(CASE WHEN F.DOCN IS NOT NULL THEN 1 ELSE 0 END) AS ACHADOS_NO_FISCAL, " + ;
+            "SUM(CASE WHEN F.DOCN IS NOT NULL AND F.QTD > 1 THEN 1 ELSE 0 END) AS NUMERO_REPETIDO_NO_FISCAL, " + ;
+            "SUM(CASE WHEN F.DOCN IS NOT NULL AND ABS(F.VALOR - Z.ZLC_VALOR) < 0.01 THEN 1 ELSE 0 END) AS MESMO_VALOR, " + ;
+            "MIN(Z.ZLC_DATA) AS PRIMEIRA, MAX(Z.ZLC_DATA) AS ULTIMA " + ;
+            "FROM " + RetSqlName("ZLC") + " Z LEFT JOIN (SELECT LTRIM(SF1.F1_DOC, '0') AS DOCN, MAX(SF1.F1_VALBRUT) AS VALOR, " + ;
+            "COUNT(*) AS QTD FROM " + cSF1 + " SF1 WHERE SF1.F1_FILIAL = '" + cFF1 + "' AND SF1.D_E_L_E_T_ = ' ' " + ;
+            "AND SF1.F1_ESPECIE LIKE 'CT%' GROUP BY LTRIM(SF1.F1_DOC, '0')) F ON F.DOCN = LTRIM(TRIM(Z.ZLC_CTE), '0') " + ;
+            "WHERE Z.ZLC_FILIAL = '" + FWxFilial("ZLC") + "' AND Z.D_E_L_E_T_ = ' ' " + ;
+            "AND Z.ZLC_CTE <> ' ' AND Z.ZLC_CTE <> 'SEM CTE'", aErros)
+      EndIf
+
+      // ---------- XML guardado? (tabelas do importador/colaboracao) ----------
+      aXml := {"CKO", "SDS", "SDT", "C00", "NNR"}
+      For nI := 1 to Len(aXml)
+         cTabs += IIf(nI > 1, ",", "") + "'" + aXml[nI] + cSuf + "'"
+      Next nI
+      aAchou := DiagLinhas("tabelasXml", "SELECT TABLE_NAME FROM ALL_TABLES WHERE " + LG_OWNER + ;
+         " AND TABLE_NAME IN (" + cTabs + ") ORDER BY 1", aErros)
+      jResp["tabelasXml"] := {}
+      For nI := 1 to Len(aAchou)
+         jXml := JsonObject():New()
+         jXml["tabela"] := aAchou[nI]["TABLE_NAME"]
+         jXml["linhas"] := DiagLinhas("linhas " + jXml["tabela"], "SELECT COUNT(*) AS QTD FROM " + jXml["tabela"], aErros)
+         jXml["colunas"] := DiagLinhas("colunas " + jXml["tabela"], "SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE " + ;
+            LG_OWNER + " AND TABLE_NAME = '" + jXml["tabela"] + "' ORDER BY COLUMN_ID", aErros)
+         aAdd(jResp["tabelasXml"], jXml)
+         If jXml["tabela"] == "NNR" + cSuf
+            jResp["armazens"] := DiagLinhas("armazens", ;
+               "SELECT SD1.D1_LOCAL AS ARMAZEM, MAX(NNR.NNR_DESCRI) AS DESCRICAO, COUNT(*) AS ITENS" + cRetJ + ;
+               "LEFT JOIN " + RetSqlName("NNR") + " NNR ON NNR.NNR_FILIAL = '" + FWxFilial("NNR") + "' " + ;
+               "AND NNR.NNR_CODIGO = SD1.D1_LOCAL AND NNR.D_E_L_E_T_ = ' '" + cRetF + "GROUP BY SD1.D1_LOCAL ORDER BY 1", aErros)
+         EndIf
+      Next nI
+
+      jResp["tabelasZ"] := DiagLinhas("tabelasZ", "SELECT TABLE_NAME FROM ALL_TABLES WHERE " + LG_OWNER + ;
+         " AND TABLE_NAME LIKE 'Z%' ORDER BY 1", aErros)
+
+      jResp["erros"] := aErros
+      jRet := oRest:setStatusResponse(200, jResp:ToJson())
+
+   Recover Using oErr
+      If ValType(oErr) == "O"
+         jRet := BuildErro(500, "ERRO_DIAGNOSTICO", TxtErro(oErr))
+      EndIf
+   End Sequence
+   ErrorBlock(bErrOld)
+   If jRet == Nil
+      jRet := BuildErro(500, "ERRO_DIAGNOSTICO", "Erro inesperado.")
+   EndIf
+Return jRet
+
+// "C1, C2" com as colunas da lista que nao estao em cExist ("|A|B|...")
+Static Function Faltam(cExist, aCols)
+   Local cRet := ""
+   Local nI   := 0
+   For nI := 1 to Len(aCols)
+      If !(("|" + aCols[nI] + "|") $ cExist)
+         cRet += aCols[nI] + " "
+      EndIf
+   Next nI
+Return cRet
+
+// Roda a consulta e devolve as linhas como {COLUNA: valor} (ate 5000). Erro vai
+// para aErros, o cursor e fechado e volta {} (as outras secoes seguem).
+Static Function DiagLinhas(cNome, cQuery, aErros)
+   Local aRet   := {}
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   Local jL     := Nil
+   Local nI     := 0
+   Local xV     := Nil
+   Local bErrAn := ErrorBlock({|oE| Break(oE) })
+   Local oErr   := Nil
+   Begin Sequence
+      oStmt := FWExecStatement():New(cQuery)
+      cAl := oStmt:OpenAlias(cAl)
+      If Empty(cAl) .or. Select(cAl) == 0
+         aAdd(aErros, cNome + ": consulta nao abriu")
+         Break
+      EndIf
+      Do While !(cAl)->(Eof()) .and. Len(aRet) < 5000
+         jL := JsonObject():New()
+         For nI := 1 to (cAl)->(FCount())
+            xV := (cAl)->(FieldGet(nI))
+            If ValType(xV) == "C"
+               jL[(cAl)->(FieldName(nI))] := TxtOut(Left(xV, 500))
+            ElseIf ValType(xV) == "N" .or. ValType(xV) == "L"
+               jL[(cAl)->(FieldName(nI))] := xV
+            ElseIf ValType(xV) == "D"
+               jL[(cAl)->(FieldName(nI))] := DToS(xV)
+            Else
+               jL[(cAl)->(FieldName(nI))] := ""
+            EndIf
+         Next nI
+         aAdd(aRet, jL)
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+      oStmt:Destroy()
+   Recover Using oErr
+      If ValType(cAl) == "C" .and. Select(cAl) > 0
+         (cAl)->(DbCloseArea())
+      EndIf
+      If ValType(oErr) == "O"
+         aAdd(aErros, cNome + ": " + Left(TxtErro(oErr), 300))
+      EndIf
+   End Sequence
+   ErrorBlock(bErrAn)
+Return aRet
 
 Static Function BuildErro(nStatus, cCod, cMsg)
    Local jE := JsonObject():New()

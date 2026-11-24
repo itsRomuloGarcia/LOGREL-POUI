@@ -34,7 +34,17 @@ O usuário quer adaptar isso ao que já existe.
 8. **Números de série que voltam:** muitas vezes vêm no e-mail. Quando não vêm, são digitados na chegada.
 9. **Escopo inicial: só locação e comodato.**
 
-## Cadastro da coleta (proposta de 24/11/2026, a confirmar com o usuário)
+## Respostas do usuário (24/11/2026, 3ª rodada)
+
+1. **Cotações:** registrar **todas** as cotações. Geralmente quem coleta é a mesma transportadora que levou na remessa, então ela pode vir sugerida (transportadora do pedido da remessa).
+2. **Entrada na chegada depende de quem emite a NF:**
+   - **o cliente emite:** o fiscal dá a entrada aqui (MATA103) quando a mercadoria chega. Esse é o sinal automático de **recebida**;
+   - **a empresa emite (NF de transporte, entrada própria):** **não** há outra entrada na chegada, porque a entrada já foi feita com a NF de transporte, antes da coleta. A **chegada tem que ser confirmada pela logística na tela**.
+3. **O cadastro proposto vira um beta**, para melhorar depois.
+
+**Diagnóstico escrito (API `2026-11-24a`):** `GET /logistica/reversa/diagnostico`. Primeiro na homologação, que tem cópia da produção até agosto de 2026.
+
+## Cadastro da coleta (proposta de 24/11/2026, aprovada como beta)
 
 Botão **Nova coleta** na aba Reversa:
 1. **Cliente:** digitar o CNPJ (ou código/nome). A tela busca no SA1 e mostra nome, endereço de coleta, cidade/UF e telefone.

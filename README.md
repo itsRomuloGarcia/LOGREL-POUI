@@ -182,6 +182,7 @@ O detalhe das regras, das decisões e das pendências está no [CLAUDE.md](CLAUD
 | `POST /api/v1/vs-financial-data/logistica/pedidos/busca` | `{"pedidos": [...]}`, até 500: pedidos pelo número, sem filtro (usada pela importação). |
 | `POST /api/v1/vs-financial-data/logistica/custos` | `{"recno", "acao": "incluir"\|"alterar"\|"excluir", "item", "tipo", "cte", "data", "transportadora", "valor", "valorEsperado", "situacao", "obs"}`: grava uma cobrança de frete (ZLC) e o histórico; devolve o pedido. |
 | `GET /api/v1/vs-financial-data/logistica/historico?pedido=NNNNNN` | Histórico do pedido (ZLH), mais novo primeiro. |
+| `GET /api/v1/vs-financial-data/logistica/reversa/diagnostico?meses=24` | Diagnóstico só de leitura da logística reversa (desde `2026-11-24a`): retornos de locação/comodato, ligação com a remessa, equipamentos no cliente, CTEs de entrada e CTEs da ZLC no fiscal. Não grava nada. |
 
 Sem as tabelas ZLC e ZLH no ambiente, a API funciona como antes (CTE na SC5, sem histórico) e o POST de custos responde 409.
 

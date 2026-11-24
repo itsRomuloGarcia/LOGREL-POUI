@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`), versão `LG_VERSAO` = `2026-11-19c` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`), versão `LG_VERSAO` = `2026-11-24a` | sim |
 | Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
@@ -275,6 +275,8 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 ## Pendências
 - **24/11/2026, feito (informado pelo usuário):** a produção está compilada (API `2026-11-23b` e `logrel.app` de 24/11) e a planilha Google está ativa. As pendências de 22/11 e 23/11 sobre a compilação na produção e a planilha ficam resolvidas.
 - **24/11/2026, projeto da logística reversa começou** (ver `IDEIAS-REVERSA-E-CTE.md`).
+  - API `2026-11-24a`: rota só de leitura `GET /logistica/reversa/diagnostico` (`getVsLogRevDiag`, `DiagReversa`, `DiagLinhas`, `Faltam`). Nada mais mudou na API, e a tela não muda. **A compilar na homologação** (base com cópia da produção até agosto de 2026); depois, ler de fora com o usuário de consulta da homologação e analisar. Os números servem de ordem de grandeza.
+  - Próximo passo, depois do diagnóstico: o **beta do cadastro da coleta**, que o usuário aprovou para melhorar depois.
 - **23/11/2026:**
   1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). O `logrel.app` da 2ª rodada (coluna Enviados hoje, cartões que filtram, filtro do Não saíram) também foi **compilado pelo usuário em 23/11**. Números esperados na tela, calculados pela API às 21:45 com as regras da tela:
      - cartões: informação faltando 510, saíram hoje 3 (000372, 000587, 000591, marcados "Saiu" no teste), em trânsito atrasados 1, faturados parados 96, sem previsão 3, sem dados para a NF-e 176;
