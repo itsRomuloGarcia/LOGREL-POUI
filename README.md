@@ -60,7 +60,7 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 
 ## O que a tela faz
 
-**Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
+**Topo:** busca e filtros. **Busca por pedido** (24/11/2026): digitar só o número de um pedido (até 6 dígitos, com ou sem os zeros) mostra só esse pedido; outros números (NF de 9 dígitos, CTE, série) e textos buscam em todos os campos, como antes. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
 
 **Atualização automática** (24/11/2026, igual ao RX Pedidos): no topo, Desligada / 5 / 10 / 15 min (padrão 5; a escolha fica no navegador). A cada 15 s a tela confere se já passou o tempo e busca os dados sem trocar a tela por "Atualizando…". Não atualiza enquanto há pedido aberto, janela aberta, filtro aberto, gravação em andamento, pedido sendo arrastado ou campo em edição: o status mostra "aguardando: …" e a resposta é aplicada assim que liberar. Se falhar, os dados anteriores ficam na tela e tenta de novo no próximo ciclo. Mantém a rolagem da página e da Programação.
 

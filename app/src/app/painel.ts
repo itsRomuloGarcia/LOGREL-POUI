@@ -807,10 +807,14 @@ export class Painel {
   /** Registros depois dos filtros do topo */
   private base(): Reg[] {
     const q = normal(this.e.busca.trim());
+    // Busca so com numero de ate 6 digitos que e um pedido: so esse pedido (pedido do
+    // usuario, 24/11/2026: "000287" trazia tambem as NFs 000002871... de outros pedidos)
+    const pedExato = /^\d{1,6}$/.test(q) ? q.padStart(6, '0') : '';
+    const soPedido = !!pedExato && this.regs.some((r) => r.p.pedido === pedExato);
     const { transp, uf, tpmat, tipo, situacao, fDe, fAte } = this.e;
     const em = (lista: string[], v: string) => !lista.length || lista.includes(v);
     return this.regs.filter((r) => {
-      if (q && !r.busca.includes(q)) return false;
+      if (soPedido ? r.p.pedido !== pedExato : q && !r.busca.includes(q)) return false;
       if (!em(transp, r.p.transportadora || '-') || !em(uf, r.p.uf || '-') || !em(tpmat, r.p.tipoMaterial || '-') || !em(tipo, r.p.tipoPedido || '-')) return false;
       if (situacao.length && !situacao.includes(r.prazo) && !(situacao.includes('custodiv') && r.nDiv > 0)) return false;
       if (fDe || fAte) {
