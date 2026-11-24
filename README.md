@@ -67,7 +67,7 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela carrega os pedidos com NF emitidos de 01/01 do ano anterior até hoje, e todos os sem NF; **Atualizar dados** repete a consulta com a data de hoje.
 
 **Abas:**
-- **Quadros:** as colunas das etapas, com cartões de alerta no topo. Os dois primeiros filtram os quadros ao clicar (23/11/2026); clicar de novo, ou em "Mostrar todos", tira o filtro:
+- **Quadros:** as colunas das etapas e, logo depois de Pedidos enviados, a coluna **Enviados hoje** (pedidos com data de envio de hoje, em qualquer etapa, com a etapa no cartão; o pedido continua também na coluna da etapa dele). No topo ficam os cartões de alerta. **Todos filtram os quadros ao clicar** (23/11/2026): os quadros mostram só os pedidos do cartão; clicar de novo, ou em "Mostrar todos", tira o filtro. Os cartões:
   - **Com informação faltando:** pedidos com algo para completar (lista abaixo);
   - **Saíram hoje:** pedidos com data de envio de hoje, com unidades e transportadoras.
 
@@ -83,8 +83,8 @@ O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela c
 
   Campo que não existe no ambiente não conta. Transportadora, volume, espécie e pesos só contam nos Previstos: com NF eles já saíram no documento e não são alterados pela tela.
 
-  Os outros cartões de alerta: em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio, custo de frete em divergência). O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
-- **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue".
+  Os outros cartões: em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio e custo de frete em divergência. O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos.
+- **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue". A coluna **Não saíram** tem uma caixa de filtro para digitar, sem opções: pedido, cliente, cidade, transportadora, NF… (a mesma busca do topo). Os cartões do topo (saem hoje, não saíram, entregas previstas hoje, com NF sem programação) levam à coluna ou ao bloco dos pedidos e o destacam.
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
   - prazo (no prazo × atrasado) e motivos de atraso, com percentual;

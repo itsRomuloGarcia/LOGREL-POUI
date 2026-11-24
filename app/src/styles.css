@@ -99,6 +99,11 @@ html, body { margin: 0; background: var(--bg); }
 .rx .filtro-ativo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 13px; }
 .rx .quadro .filtro-quadro { margin-top: 4px; }
 .rx .quadro .filtro-quadro.ativo { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+/* cards da Programacao: destaque rapido da coluna aberta pelo card */
+.rx .quadro.destaque, .rx .painel.destaque { box-shadow: 0 0 0 3px var(--accent); transition: box-shadow 0.2s; }
+/* filtro digitado da coluna Nao sairam (Programacao, 23/11/2026) */
+.rx .quadro .filtro-kb { cursor: text; }
+.rx .quadro .filtro-kb.ativo { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .rx .kpi .v small.de { font-size: 14px; font-weight: 600; color: var(--muted); }
 .rx .esteira { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 1100px) { .rx .esteira { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -377,7 +382,7 @@ html, body { margin: 0; background: var(--bg); }
 
 /* ===== Logistica (LOGREL) ===== */
 /* Quadros: previstos, faturados, enviados, entregues */
-.rx .quadros { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.rx .quadros { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; align-items: start; }
 @media (max-width: 1500px) { .rx .quadros { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1200px) { .rx .quadros { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .rx .quadros { grid-template-columns: minmax(0, 1fr); } }

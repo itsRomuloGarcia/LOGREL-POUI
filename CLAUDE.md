@@ -248,10 +248,15 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - `ObsSql` ficou genérico (C5_ZOBS e C5_MENNOTA), lendo memo real por BLOB/CLOB.
   - **Período saiu do topo:** `consultar()` usa `e.de` (01/01 do ano anterior) até hoje.
   - **Testado** com a cópia da API falsa (campos novos, pedidos sem transportadora e peso, 2 envios hoje), `ng serve` e Chrome headless: 17 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi testada pelo harness do Node: 18 pendências e 2 "saíram hoje", iguais à tela. Na `2026-11-23b`, a API falsa ganhou um PUT. A gravação mandou só `{"obsRetorno": ...}`, e o texto voltou na gaveta: 18 verificações ok. Pacotes regerados em 23/11 com a `23b`. **Não testado no Protheus.**
+- **23/11/2026 (2ª), pedido do usuário** (só a tela; a API continua a `2026-11-23b`):
+  - **Coluna "Enviados hoje" nos Quadros:** o "card" que o usuário pediu era uma **coluna**, não o cartão de contagem. `quadroHoje()` lista os pedidos com `dataEnvio` = hoje, em qualquer etapa, com o selo da etapa (`cartao(r, true)`), e entra depois dos Enviados (`cols.splice(3, …)`). A grade passou a 6 colunas em telas largas.
+  - **Todos os cartões de contagem dos Quadros filtram** ("em todos os cartões"): `cardsQuadros()` tem id, título, texto e filtro de cada um, e `e.fGlobal` guarda o id do cartão. A faixa `.filtro-ativo` diz quantos pedidos e qual cartão. Testado: os 9 cartões mostram exatamente o número que exibem.
+  - **Programação:** a coluna **Não saíram** ganhou uma caixa de texto (`#kb-filtro-nao`, `fNaoSairam`, mesma busca normalizada do topo). Redesenha a tela e devolve o foco ao campo. O cabeçalho mostra "N de M · filtrado", e o cartão "Não saíram" segue com o total. Os 4 cartões da Programação viraram botões (`data-acao="ir"`): rolam até `kb-hoje`, `kb-nao`, `kb-ent` e `kb-sem` e destacam (`.destaque`).
+  - Testado com a API falsa e Chrome headless: 21 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. Pacotes regerados.
 
 ## Pendências
 - **23/11/2026:**
-  1. Homologação (o `ZLH_OBS` já foi criado pelo usuário): compilar o `RESTLOGREL.tlpp` `2026-11-23b` e o `logrel.app` de 23/11. O `LOGRELUPD.prw` não mudou em relação ao que está no RPO.
+  1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). **Falta compilar o `logrel.app` da 2ª rodada de 23/11** (coluna Enviados hoje, cartões que filtram, filtro do Não saíram). Na homologação não há pedido retornado: a observação do retorno só pode ser testada depois que o usuário lançar um retorno.
   2. Conferir: gravar e alterar uma observação de retorno (aparece no Histórico); endereço e C5_MENNOTA na gaveta.
   3. Produção: criar o `ZLH_OBS` igual ao da homologação e depois compilar os mesmos fontes.
   5. Colar o `planilha/Codigo.gs` novo no Apps Script.
