@@ -56,7 +56,7 @@
 //     SC5 (pedido do usuario, para nao criar mais campo nela). Cada gravacao e
 //     uma linha da ZLH com ZLH_CAMPO = "OBSRET" e o texto inteiro no ZLH_OBS
 //     (campo criado pelo usuario na ZLH); vale a linha mais recente do pedido
-//     (ObsRetornos). Sem a ZLH ou o ZLH_OBS: vazio e "ZLH_OBS" em camposFaltando.
+//     (ValoresZlh, desde 2026-11-24b). Sem a ZLH ou o ZLH_OBS: vazio e "ZLH_OBS" em camposFaltando.
 //   - Numeros de serie (2026-11-16a, pedido do usuario, igual ao RX Pedidos):
 //     cada item ganha "numerosSerie" = [[serie, nf], ...] da Z01 (Z01_PEDIDO,
 //     Z01_ITEM, Z01_SERIE, Z01_NFEDO), com e sem NF. Sem a tabela Z01 ou as
@@ -114,6 +114,25 @@
 // LOGISTICA REVERSA (2026-11-24a): GET /logistica/reversa/diagnostico, so
 // leitura, antes de desenhar a aba Reversa. Detalhe no bloco da rota.
 //
+// FINALIZADO SEM ENTREGA, EXTRAVIO E INDICADOR "OUTROS" (2026-11-24b, pedido
+// do usuario): ficam na ZLH, NAO na SC5 (escolha do usuario), no mesmo
+// caminho da observacao do retorno. Cada chave do PUT abaixo vira uma linha
+// da ZLH com o ZLH_CAMPO da lista (CamposZlh), o valor CRU no ZLH_OBS (data
+// AAAAMMDD, valor 1234.56, codigo, texto) e o resumo legivel em VALANT/VALNOV
+// para o Historico da tela. Vale a linha mais recente de cada pedido+campo
+// (ValoresZlh); o GET manda as chaves em cada pedido.
+//   finalizado (FINALIZ, "S" ou vazio), motivoFinal (FINMOT: E=Extravio;
+//   P=Enviado em outro pedido;O=Outro motivo), dataFinal (FINDATA),
+//   pedidoFinal (FINPED, pedido em que a mercadoria foi), reembolso (REEMB:
+//   P=Pendente;S=Reembolsado;N=Sem reembolso), valorReembolso (REEMBVL),
+//   dataReembolso (REEMBDT), obsFinal (FINOBS), obsIndicador (OBSIND, o que
+//   aconteceu quando o indicador de atraso e "Outros") e obsRetorno (OBSRET).
+//   Regras: os dados da finalizacao so com finalizado = S; finalizado exige
+//   motivo e data (>= emissao), nao vale com retorno nem com entrega; extravio
+//   exige envio (data >= envio); "outro pedido" exige o pedido (existe e e
+//   outro); "outro motivo" exige a observacao; reembolso so no extravio; data
+//   do reembolso so com Reembolsado.
+//
 // Acesso: SEM a trava U_VSAPIACE/MV_VSAPUSR desde 2026-11-18a, por pedido do
 // usuario (18/11/2026). Quem abre a tela pelo menu (U_LOGRELAPP) usa a API.
 // Nao depende mais do VSACESSO.tlpp.
@@ -122,7 +141,10 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-24a"
+#define LG_VERSAO     "2026-11-24b"
+// Combos da finalizacao sem entrega (gravados na ZLH, nao no SX3)
+#define FIN_MOTIVOS   "E=Extravio;P=Enviado em outro pedido;O=Outro motivo"
+#define FIN_REEMB     "P=Pendente;S=Reembolsado;N=Sem reembolso"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -196,6 +218,8 @@ Static Function LerPedidos()
       jOpc["reentrega"]    := OpcoesCombo("C5_ZREENTR")
       jOpc["tipoPedido"]   := OpcoesCombo("C5_ZTPPEDI")
       jOpc["motivoRetorno"]:= OpcoesCombo("C5_ZMOTRET")
+      jOpc["motivoFinal"]  := OpcoesBox(FIN_MOTIVOS)
+      jOpc["reembolso"]    := OpcoesBox(FIN_REEMB)
       lCus := TemTab("ZLC")
       If lCus
          jOpc["tipoCusto"]     := OpcoesCombo("ZLC_TIPO")
@@ -295,10 +319,23 @@ Static Function GravaPedido()
    Local cHA         := ""
    Local cHN         := ""
    Local cAvisoH     := ""
-   Local lObsRet     := .F.
-   Local cObsRet     := ""
-   Local cObsAnt     := ""
    Local cAvisoO     := ""
+   Local aCz         := {}
+   Local aZlh        := {}
+   Local jAtu        := Nil
+   Local lZlhOk      := .F.
+   Local lZlhConf    := .F.
+   Local cErroZ      := ""
+   Local cAntZ       := ""
+   Local cFin        := ""
+   Local cMotF       := ""
+   Local dFim        := CToD("")
+   Local cPedF       := ""
+   Local cReeF       := ""
+   Local cVlrF       := ""
+   Local dReeF       := CToD("")
+   Local cObsF       := ""
+   Local dEntFinal   := CToD("")
 
    oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
    oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
@@ -444,32 +481,43 @@ Static Function GravaPedido()
          EndIf
       Next nI
 
-      // observacao do retorno: vai para a ZLH (ZLH_OBS), nao para a SC5 (2026-11-23b)
-      If jBody:HasProperty("obsRetorno")
-         If !TemObsRet()
-            aAdd(aFalta, "ZLH_OBS")
-         Else
-            cObsRet := AllTrim(TxtIn(jBody["obsRetorno"]))
-            cObsRet := StrTran(StrTran(cObsRet, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
-            cObsRet := StrTran(cObsRet, Chr(10), IIf(TamSX3("ZLH_OBS")[3] == "M", Chr(13) + Chr(10), " "))
-            If TamSX3("ZLH_OBS")[3] != "M" .and. Len(cObsRet) > TamSX3("ZLH_OBS")[1]
-               jRet := BuildErro(400, "TEXTO_GRANDE", "obsRetorno com mais de " + cValToChar(TamSX3("ZLH_OBS")[1]) + " caracteres.")
-               lRespondido := .T.
-               Break
-            EndIf
-            lObsRet := .T.
-            If !Empty(cObsRet)
-               lRetCampos := .T.
-            EndIf
+      // Campos que ficam na ZLH (ZLH_OBS), nao na SC5: observacao do retorno
+      // (2026-11-23b), finalizacao sem entrega, extravio e descricao do
+      // indicador "Outros" (2026-11-24b). aZlh = {ZLH_CAMPO, titulo, tipo, valor cru}
+      aCz := CamposZlh()
+      For nI := 1 to Len(aCz)
+         If !jBody:HasProperty(aCz[nI][1])
+            Loop
          EndIf
-      EndIf
+         If !lZlhConf
+            lZlhOk   := TemObsRet()
+            lZlhConf := .T.
+         EndIf
+         If !lZlhOk
+            If aScan(aFalta, {|x| x == "ZLH_OBS"}) == 0
+               aAdd(aFalta, "ZLH_OBS")
+            EndIf
+            Loop
+         EndIf
+         cErroZ := ""
+         cTxt := ZlhIn(jBody[aCz[nI][1]], aCz[nI][3], cPedido, @cErroZ)
+         If !Empty(cErroZ)
+            jRet := BuildErro(400, "VALOR_INVALIDO", aCz[nI][1] + ": " + cErroZ)
+            lRespondido := .T.
+            Break
+         EndIf
+         aAdd(aZlh, {aCz[nI][2], aCz[nI][4], aCz[nI][3], cTxt})
+         If aCz[nI][2] == "OBSRET" .and. !Empty(cTxt)
+            lRetCampos := .T.
+         EndIf
+      Next nI
 
       If Len(aFalta) > 0
          jRet := BuildErro(400, "CAMPO_INEXISTENTE", "Campos ainda nao criados: " + ArrToTxt(aFalta) + ".")
          lRespondido := .T.
          Break
       EndIf
-      If Len(aGrava) == 0 .and. Len(aCusto) == 0 .and. !lObsRet
+      If Len(aGrava) == 0 .and. Len(aCusto) == 0 .and. Len(aZlh) == 0
          jRet := BuildErro(400, "SEM_CAMPOS", "Nenhum campo para gravar.")
          lRespondido := .T.
          Break
@@ -527,6 +575,59 @@ Static Function GravaPedido()
          lRespondido := .T.
          Break
       EndIf
+
+      // Finalizado sem entrega / extravio (2026-11-24b): so quando o corpo
+      // traz alguma chave da ZLH. Valor final = o do corpo ou o gravado.
+      If Len(aZlh) > 0
+         jAtu  := ZlhAtuais(cPedido)
+         cFin  := ZlhFinal(aZlh, jAtu, "FINALIZ")
+         cMotF := ZlhFinal(aZlh, jAtu, "FINMOT")
+         dFim  := SToD(ZlhFinal(aZlh, jAtu, "FINDATA"))
+         cPedF := ZlhFinal(aZlh, jAtu, "FINPED")
+         cReeF := ZlhFinal(aZlh, jAtu, "REEMB")
+         cVlrF := ZlhFinal(aZlh, jAtu, "REEMBVL")
+         dReeF := SToD(ZlhFinal(aZlh, jAtu, "REEMBDT"))
+         cObsF := ZlhFinal(aZlh, jAtu, "FINOBS")
+         dEntFinal := IIf(cReent == "SIM", dNova, dEnt)
+         If cFin != "S" .and. !(Empty(cMotF) .and. Empty(dFim) .and. Empty(cPedF) .and. Empty(cReeF) .and. Empty(cVlrF) .and. Empty(dReeF) .and. Empty(cObsF))
+            jRet := BuildErro(400, "SEM_FINALIZADO", "Motivo, data, pedido, reembolso e observacao da finalizacao so com o pedido marcado como finalizado.")
+            lRespondido := .T.
+            Break
+         EndIf
+         If cFin == "S"
+            cErroZ := ""
+            If Empty(cMotF)
+               cErroZ := "Informe o motivo da finalizacao sem entrega."
+            ElseIf Empty(dFim)
+               cErroZ := "Informe a data da finalizacao (no extravio, a data do extravio)."
+            ElseIf dFim < dEmis
+               cErroZ := "Data da finalizacao (" + DToC(dFim) + ") anterior a emissao do pedido (" + DToC(dEmis) + ")."
+            ElseIf !Empty(dRet)
+               cErroZ := "Pedido com data do retorno ja esta encerrado em Retornados: apague o retorno para finalizar sem entrega."
+            ElseIf !Empty(dEntFinal)
+               cErroZ := "Pedido com data de entrega ja esta encerrado: apague a data de entrega para finalizar sem entrega."
+            ElseIf cMotF == "E" .and. Empty(dEnv)
+               cErroZ := "Extravio so para pedido enviado: informe a data de envio."
+            ElseIf cMotF == "E" .and. dFim < dEnv
+               cErroZ := "Data do extravio (" + DToC(dFim) + ") anterior ao envio (" + DToC(dEnv) + ")."
+            ElseIf cMotF == "P" .and. Empty(cPedF)
+               cErroZ := "Informe o pedido em que a mercadoria foi enviada."
+            ElseIf cMotF == "O" .and. Empty(cObsF)
+               cErroZ := "Outro motivo: descreva na observacao o que aconteceu."
+            ElseIf cMotF != "E" .and. !(Empty(cReeF) .and. Empty(cVlrF) .and. Empty(dReeF))
+               cErroZ := "Reembolso so no extravio."
+            ElseIf !Empty(dReeF) .and. cReeF != "S"
+               cErroZ := "Data do reembolso so com Reembolsado."
+            ElseIf !Empty(dReeF) .and. dReeF < dFim
+               cErroZ := "Data do reembolso (" + DToC(dReeF) + ") anterior ao extravio (" + DToC(dFim) + ")."
+            EndIf
+            If !Empty(cErroZ)
+               jRet := BuildErro(400, "FINALIZACAO_INVALIDA", cErroZ)
+               lRespondido := .T.
+               Break
+            EndIf
+         EndIf
+      EndIf
       If lComercial .and. TemNota(cPedido)
          jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, volume, especie e pesos nao podem mais ser alterados aqui.")
          lRespondido := .T.
@@ -567,13 +668,13 @@ Static Function GravaPedido()
          cAvisoH := GravaHists(cPedido, aHist, cOrigem)
       EndIf
 
-      cEtapa := "05d-obs-retorno"
-      If lObsRet
-         cObsAnt := ObsRetAtual(cPedido)
-         If !(cObsAnt == cObsRet)
-            cAvisoO := GravaObsRet(cPedido, cObsAnt, cObsRet, cOrigem)
+      cEtapa := "05d-zlh"
+      For nI := 1 to Len(aZlh)
+         cAntZ := IIf(ValType(jAtu[aZlh[nI][1]]) == "C", jAtu[aZlh[nI][1]], "")
+         If !(cAntZ == aZlh[nI][4])
+            cAvisoO += GravaZlh(cPedido, aZlh[nI][1], aZlh[nI][2], aZlh[nI][3], cAntZ, aZlh[nI][4], cOrigem)
          EndIf
-      EndIf
+      Next nI
 
       cEtapa := "06-resposta"
       aPed := ConsultaPedidos(CToD(""), CToD(""), {cPedido}, @aIgnora, @cEtapa, @cAlAberto)
@@ -1114,8 +1215,8 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cEtapa := "02d-custos"
    CustosPedidos(aPed)
 
-   cEtapa := "02e-obs-retorno"
-   ObsRetornos(aPed, @aFalta)
+   cEtapa := "02e-zlh"
+   ValoresZlh(aPed, @aFalta)
 Return aPed
 
 // ZLH existe e tem o ZLH_OBS (criado pelo usuario em 23/11/2026, fora do
@@ -1142,71 +1243,225 @@ Static Function ObsZlhSql()
    EndIf
 Return "ZLH_OBS"
 
-// "obsRetorno" de cada pedido = ZLH_OBS da linha OBSRET mais recente (sao
-// poucas linhas: le todas as da filial e fica com a ultima de cada pedido)
-Static Function ObsRetornos(aPed, aFalta)
-   Local jObs   := JsonObject():New()
+// Campos do pedido que ficam na ZLH, nao na SC5 (pedido do usuario: nao criar
+// mais campo na SC5). {chave do JSON, ZLH_CAMPO (ate 10), tipo, titulo (ate 30)}
+// tipo: M texto livre, S sim (S ou vazio), D data, N valor, P outro pedido,
+//       F motivo da finalizacao (FIN_MOTIVOS), R reembolso (FIN_REEMB)
+Static Function CamposZlh()
+   Local a := {}
+   aAdd(a, {"obsRetorno",     "OBSRET",  "M", "Observacao do retorno"})
+   aAdd(a, {"finalizado",     "FINALIZ", "S", "Finalizado sem entrega"})
+   aAdd(a, {"motivoFinal",    "FINMOT",  "F", "Motivo da finalizacao"})
+   aAdd(a, {"dataFinal",      "FINDATA", "D", "Data da finalizacao"})
+   aAdd(a, {"pedidoFinal",    "FINPED",  "P", "Enviado no pedido"})
+   aAdd(a, {"reembolso",      "REEMB",   "R", "Reembolso do extravio"})
+   aAdd(a, {"valorReembolso", "REEMBVL", "N", "Valor do reembolso"})
+   aAdd(a, {"dataReembolso",  "REEMBDT", "D", "Data do reembolso"})
+   aAdd(a, {"obsFinal",       "FINOBS",  "M", "Observacao da finalizacao"})
+   aAdd(a, {"obsIndicador",   "OBSIND",  "M", "Indicador: o que aconteceu"})
+Return a
+
+// Valor da tela -> valor cru gravado no ZLH_OBS ("" limpa). Erro em cErro.
+Static Function ZlhIn(xV, cTipo, cPedido, cErro)
+   Local cV   := ""
+   Local dV   := CToD("")
+   Local nV   := 0
+   Local nTam := 0
+   If cTipo == "S"
+      If ValType(xV) == "L"
+         Return IIf(xV, "S", "")
+      EndIf
+      cV := Upper(AllTrim(TxtIn(xV)))
+      If cV $ "|S|SIM|"
+         Return "S"
+      ElseIf Empty(cV) .or. cV $ "|N|NAO|"
+         Return ""
+      EndIf
+      cErro := "use S ou vazio."
+      Return ""
+   ElseIf cTipo == "D"
+      cV := AllTrim(SStr(xV))
+      dV := IsoIn(cV)
+      If !Empty(cV) .and. Empty(dV)
+         cErro := "data invalida (use AAAA-MM-DD)."
+         Return ""
+      EndIf
+      Return IIf(Empty(dV), "", DToS(dV))
+   ElseIf cTipo == "N"
+      nV := NumIn(xV)
+      If nV < 0
+         cErro := "valor negativo."
+         Return ""
+      EndIf
+      Return IIf(nV == 0, "", AllTrim(Str(nV, 16, 2)))
+   ElseIf cTipo == "F" .or. cTipo == "R"
+      cV := Upper(AllTrim(TxtIn(xV)))
+      If !Empty(cV) .and. aScan(OpcoesBox(IIf(cTipo == "F", FIN_MOTIVOS, FIN_REEMB)), {|x| x[1] == cV}) == 0
+         cErro := "opcao [" + cV + "] nao existe."
+         Return ""
+      EndIf
+      Return cV
+   ElseIf cTipo == "P"
+      cV := Upper(AllTrim(TxtIn(xV)))
+      nTam := TamSX3("C5_NUM")[1]
+      If !Empty(cV) .and. Len(cV) < nTam .and. SoDigitos(cV)
+         cV := PadL(cV, nTam, "0")
+      EndIf
+      If !Empty(cV) .and. cV == AllTrim(cPedido)
+         cErro := "tem que ser outro pedido."
+         Return ""
+      EndIf
+      If !Empty(cV) .and. !ExistePedido(cV)
+         cErro := "pedido " + cV + " nao encontrado (SC5)."
+         Return ""
+      EndIf
+      Return cV
+   EndIf
+   // texto livre: quebra de linha = CRLF no memo, espaco no campo caracter
+   cV := AllTrim(TxtIn(xV))
+   cV := StrTran(StrTran(cV, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
+   cV := StrTran(cV, Chr(10), IIf(TamSX3("ZLH_OBS")[3] == "M", Chr(13) + Chr(10), " "))
+   If TamSX3("ZLH_OBS")[3] != "M" .and. Len(cV) > TamSX3("ZLH_OBS")[1]
+      cErro := "texto com mais de " + cValToChar(TamSX3("ZLH_OBS")[1]) + " caracteres."
+      Return ""
+   EndIf
+Return cV
+
+// Valor cru do ZLH_OBS -> valor do JSON do GET
+Static Function ZlhOut(cV, cTipo)
+   If cTipo == "D"
+      Return IsoOut(cV)
+   ElseIf cTipo == "N"
+      Return IIf(Empty(cV), 0, ValTxt(cV))
+   EndIf
+Return TxtOut(cV)
+
+// Valor cru -> texto do historico (VALANT/VALNOV)
+Static Function ZlhTxt(cV, cTipo)
+   Local aOpc := {}
+   Local nP   := 0
+   If Empty(cV)
+      Return ""
+   ElseIf cTipo == "D"
+      Return DToC(SToD(cV))
+   ElseIf cTipo == "N"
+      Return AllTrim(Transform(ValTxt(cV), "@E 999,999,999.99"))
+   ElseIf cTipo == "S"
+      Return "Sim"
+   ElseIf cTipo == "F" .or. cTipo == "R"
+      aOpc := OpcoesBox(IIf(cTipo == "F", FIN_MOTIVOS, FIN_REEMB))
+      nP := aScan(aOpc, {|x| x[1] == cV})
+      Return cV + IIf(nP > 0, " - " + aOpc[nP][2], "")
+   EndIf
+Return UmaLinha(cV)
+
+// [[codigo, descricao], ...] de um combo fixo no fonte ("E=Extravio;...")
+Static Function OpcoesBox(cBox)
+   Local aRet := {}
+   Local aOpc := StrTokArr(cBox, ";")
+   Local nI   := 0
+   Local nPos := 0
+   For nI := 1 to Len(aOpc)
+      nPos := At("=", aOpc[nI])
+      If nPos > 0
+         aAdd(aRet, {AllTrim(SubStr(aOpc[nI], 1, nPos - 1)), AllTrim(SubStr(aOpc[nI], nPos + 1))})
+      EndIf
+   Next nI
+Return aRet
+
+// Campos da ZLH de cada pedido = ZLH_OBS da linha mais recente de cada
+// pedido+campo (sao poucas linhas: le todas as da filial). Sem a ZLH ou o
+// ZLH_OBS: tudo vazio e "ZLH_OBS" em camposFaltando.
+Static Function ValoresZlh(aPed, aFalta)
+   Local aCz    := CamposZlh()
+   Local jV     := JsonObject():New()
+   Local cIn    := ""
    Local cQuery := ""
    Local cAl    := GetNextAlias()
    Local oStmt  := Nil
+   Local cK     := ""
    Local nI     := 0
+   Local nJ     := 0
+   Local lOk    := .F.
    If Len(aPed) == 0
       Return Nil
    EndIf
-   If !TemObsRet()
+   lOk := TemObsRet()
+   If !lOk
       aAdd(aFalta, "ZLH_OBS")
-      For nI := 1 to Len(aPed)
-         aPed[nI]["obsRetorno"] := ""
-      Next nI
-      Return Nil
+   Else
+      cIn := ZlhCamposIn()
+      cQuery := "SELECT ZLH_PEDIDO, ZLH_CAMPO, " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + " "
+      cQuery += "WHERE ZLH_FILIAL = ? AND ZLH_CAMPO IN (" + cIn + ") AND D_E_L_E_T_ = ' ' "
+      cQuery += "ORDER BY ZLH_PEDIDO, ZLH_DATA, ZLH_HORA, R_E_C_N_O_ "
+      oStmt := FWExecStatement():New(cQuery)
+      oStmt:SetString(1, FWxFilial("ZLH"))
+      cAl := oStmt:OpenAlias(cAl)
+      If !Empty(cAl) .and. Select(cAl) > 0
+         Do While !(cAl)->(Eof())
+            jV[AllTrim((cAl)->ZLH_PEDIDO) + "|" + AllTrim((cAl)->ZLH_CAMPO)] := AllTrim(cValToChar((cAl)->OBS))
+            (cAl)->(DbSkip())
+         EndDo
+         (cAl)->(DbCloseArea())
+      EndIf
+      oStmt:Destroy()
    EndIf
-   cQuery := "SELECT ZLH_PEDIDO, " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + " "
-   cQuery += "WHERE ZLH_FILIAL = ? AND ZLH_CAMPO = 'OBSRET' AND D_E_L_E_T_ = ' ' "
-   cQuery += "ORDER BY ZLH_PEDIDO, ZLH_DATA, ZLH_HORA, R_E_C_N_O_ "
-   oStmt := FWExecStatement():New(cQuery)
+   For nI := 1 to Len(aPed)
+      For nJ := 1 to Len(aCz)
+         cK := aPed[nI]["pedido"] + "|" + aCz[nJ][2]
+         aPed[nI][aCz[nJ][1]] := ZlhOut(IIf(lOk .and. ValType(jV[cK]) == "C", jV[cK], ""), aCz[nJ][3])
+      Next nJ
+   Next nI
+Return Nil
+
+// Valores crus gravados hoje para o pedido (linha mais recente de cada campo,
+// sem acento convertido): para as regras, comparar e montar o historico
+Static Function ZlhAtuais(cPedido)
+   Local jRet   := JsonObject():New()
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   oStmt := FWExecStatement():New("SELECT ZLH_CAMPO, " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + ;
+      " WHERE ZLH_FILIAL = ? AND ZLH_PEDIDO = ? AND ZLH_CAMPO IN (" + ZlhCamposIn() + ") AND D_E_L_E_T_ = ' ' " + ;
+      "ORDER BY ZLH_DATA, ZLH_HORA, R_E_C_N_O_")
    oStmt:SetString(1, FWxFilial("ZLH"))
+   oStmt:SetString(2, cPedido)
    cAl := oStmt:OpenAlias(cAl)
    If !Empty(cAl) .and. Select(cAl) > 0
       Do While !(cAl)->(Eof())
-         jObs[AllTrim((cAl)->ZLH_PEDIDO)] := TxtOut(AllTrim(cValToChar((cAl)->OBS)))
+         jRet[AllTrim((cAl)->ZLH_CAMPO)] := AllTrim(cValToChar((cAl)->OBS))
          (cAl)->(DbSkip())
       EndDo
       (cAl)->(DbCloseArea())
    EndIf
    oStmt:Destroy()
-   For nI := 1 to Len(aPed)
-      aPed[nI]["obsRetorno"] := IIf(ValType(jObs[aPed[nI]["pedido"]]) == "C", jObs[aPed[nI]["pedido"]], "")
-   Next nI
-Return Nil
+Return jRet
 
-// Observacao do retorno gravada hoje (linha OBSRET mais recente), sem acento
-// convertido: para comparar com a nova e montar o historico
-Static Function ObsRetAtual(cPedido)
-   Local cRet   := ""
-   Local cAl    := GetNextAlias()
-   Local oStmt  := Nil
-   oStmt := FWExecStatement():New("SELECT " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + ;
-      " WHERE ZLH_FILIAL = ? AND ZLH_PEDIDO = ? AND ZLH_CAMPO = 'OBSRET' AND D_E_L_E_T_ = ' ' " + ;
-      "ORDER BY ZLH_DATA DESC, ZLH_HORA DESC, R_E_C_N_O_ DESC")
-   oStmt:SetString(1, FWxFilial("ZLH"))
-   oStmt:SetString(2, cPedido)
-   cAl := oStmt:OpenAlias(cAl)
-   If !Empty(cAl) .and. Select(cAl) > 0
-      If !(cAl)->(Eof())
-         cRet := AllTrim(cValToChar((cAl)->OBS))
-      EndIf
-      (cAl)->(DbCloseArea())
+// "'OBSRET','FINALIZ',..." para o IN das consultas
+Static Function ZlhCamposIn()
+   Local aCz := CamposZlh()
+   Local cIn := ""
+   Local nI  := 0
+   For nI := 1 to Len(aCz)
+      cIn += IIf(nI > 1, ",", "") + "'" + aCz[nI][2] + "'"
+   Next nI
+Return cIn
+
+// Valor final de um campo da ZLH: o que veio no corpo, senao o gravado
+Static Function ZlhFinal(aZlh, jAtu, cCampo)
+   Local nP := aScan(aZlh, {|x| x[1] == cCampo})
+   If nP > 0
+      Return aZlh[nP][4]
    EndIf
-   oStmt:Destroy()
-Return cRet
+Return IIf(ValType(jAtu[cCampo]) == "C", jAtu[cCampo], "")
 
 // Texto numa linha so (quebras viram espaco), para o resumo do historico
 Static Function UmaLinha(cTxt)
 Return AllTrim(StrTran(StrTran(StrTran(cTxt, Chr(13) + Chr(10), " "), Chr(13), " "), Chr(10), " "))
 
-// Uma linha OBSRET na ZLH: texto inteiro no ZLH_OBS; antes/depois resumidos
-// (VALANT/VALNOV) para o historico da tela. Erro volta como aviso.
-Static Function GravaObsRet(cPedido, cAnt, cNova, cOrigem)
+// Uma linha na ZLH para um campo que fica nela: valor cru no ZLH_OBS;
+// antes/depois legiveis (VALANT/VALNOV) para o historico da tela. Erro volta
+// como aviso (a SC5 ja foi gravada).
+Static Function GravaZlh(cPedido, cCampo, cTitulo, cTipo, cAnt, cNova, cOrigem)
    Local cErro  := ""
    Local oErr   := Nil
    Local aU     := UsrInfo()
@@ -1222,16 +1477,16 @@ Static Function GravaObsRet(cPedido, cAnt, cNova, cOrigem)
       ZLH->ZLH_HORA   := Time()
       ZLH->ZLH_ACAO   := cAcao
       ZLH->ZLH_ORIGEM := cOrigem
-      ZLH->ZLH_CAMPO  := "OBSRET"
-      ZLH->ZLH_TITULO := Left(TituloCampo("OBSRET"), TamSX3("ZLH_TITULO")[1])
-      ZLH->ZLH_VALANT := Left(UmaLinha(cAnt), TamSX3("ZLH_VALANT")[1])
-      ZLH->ZLH_VALNOV := Left(UmaLinha(cNova), TamSX3("ZLH_VALNOV")[1])
+      ZLH->ZLH_CAMPO  := cCampo
+      ZLH->ZLH_TITULO := Left(cTitulo, TamSX3("ZLH_TITULO")[1])
+      ZLH->ZLH_VALANT := Left(ZlhTxt(cAnt, cTipo), TamSX3("ZLH_VALANT")[1])
+      ZLH->ZLH_VALNOV := Left(ZlhTxt(cNova, cTipo), TamSX3("ZLH_VALNOV")[1])
       ZLH->ZLH_OBS    := cNova
       ZLH->ZLH_CODUSR := aU[1]
       ZLH->ZLH_USUARI := aU[2]
       ZLH->(MsUnlock())
    Recover Using oErr
-      cErro := "Gravado, mas a observacao do retorno falhou: " + TxtErro(oErr)
+      cErro := "Gravado, mas " + cTitulo + " falhou: " + TxtErro(oErr) + " "
    End Sequence
    ErrorBlock(bErrAn)
 Return cErro

@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`), versão `LG_VERSAO` = `2026-11-24a` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`), versão `LG_VERSAO` = `2026-11-24b` | sim |
 | Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
@@ -272,10 +272,37 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - **24/11/2026 (3ª):** o usuário buscou um pedido entregue e ele só aparecia na Lista completa. O quadro Entregues cortava em `DIAS_ENTREGUES` (30 dias) mesmo com a busca preenchida. Agora, com texto na busca, o corte não vale (testado com a API falsa: o pedido entregue em 07/10 aparece com a busca e some sem ela).
 - **24/11/2026 (4ª):** a busca "000287" trazia também 8 pedidos cuja NF contém o número (NF 000002871…). Em `base()`, número de até 6 dígitos que é um pedido (`padStart(6, "0")`) filtra **só esse pedido** em toda a tela; outros números e textos seguem a busca normal. Na homologação o 000287 está em **Enviados** (NF 24/09, envio 13/11, sem entrega). Se o usuário não o viu nos quadros, provavelmente era a produção, ainda com a tela de 19/11, ou um entregue há mais de 30 dias, que é o corte corrigido no commit anterior.
 
+- **24/11/2026 (5ª), pedido do usuário: melhorias nos envios** (API `2026-11-24b` + `logrel.app` + planilha):
+  - **Situação na produção** (lida pela API, só leitura, antes de mexer): o indicador "6 Extravio" estava em 11 pedidos. Desses, 8 foram entregues depois, 1 foi lançado como retorno "Outros" com reenvio (002731 → 003220) e 2 ficaram em Enviados sem fim: o **000650**, desde fevereiro, e o **003050**, desde julho. Havia só 3 retornados: 002731, 004543 e 001426 (sem motivo e sem reenvio).
+  - **Decisões do usuário:**
+    - extravio e reembolso **na ZLH**, sem mexer na SC5;
+    - em vez de mexer nos Retornados, uma **caixa "finalizado"** que encerra o pedido sem a data de entrega (por exemplo, a mercadoria foi em outro pedido);
+    - a descrição do indicador "Outros" **na ZLH**, como a observação do retorno.
+  - **API:** `CamposZlh()` lista as chaves que ficam na ZLH, cada uma com um `ZLH_CAMPO` próprio: `OBSRET`, `FINALIZ`, `FINMOT`, `FINDATA`, `FINPED`, `REEMB`, `REEMBVL`, `REEMBDT`, `FINOBS` e `OBSIND`.
+    - O **valor cru** vai no `ZLH_OBS` (`ZlhIn`/`ZlhOut`) e o texto legível em `VALANT`/`VALNOV` (`ZlhTxt`).
+    - `ValoresZlh` (GET) fica com a última linha de cada pedido + campo. `ZlhAtuais`/`ZlhFinal` dão o valor atual para as regras. `GravaZlh` substitui o `GravaObsRet`, e `ObsRetornos`/`ObsRetAtual` saíram.
+    - Combos fixos `FIN_MOTIVOS`/`FIN_REEMB` (`OpcoesBox`) vão em `opcoes.motivoFinal`/`opcoes.reembolso`.
+    - As regras ficam na etapa `04-regras` (`FINALIZACAO_INVALIDA`, `SEM_FINALIZADO`) e só rodam quando o corpo traz alguma chave da ZLH. A importação, que só manda campos da SC5, não passa por elas.
+  - **Tela:**
+    - etapa nova `fin` ("Finalizado"), depois de `ent` e antes de `env`: retorno > entrega > finalizado > envio;
+    - nos Quadros fica na coluna do retorno, que passou a se chamar **"Retornados e finalizados"** (`COLUNAS_QUADRO`, `COL_RET`, ordem por `dataFim`). Sai da Programação e não entra no % no prazo;
+    - cartão **Reembolsos pendentes** (extravio com reembolso vazio ou P);
+    - pendências novas: `reembolso` e `descInd` (indicador "Outros" sem descrição);
+    - gaveta: grupo **Finalizar sem entrega**. Marcar a caixa põe a data de hoje. Os campos ligam e desligam pelo motivo e pelo reembolso. Desmarcar limpa tudo (`FINAL`/`REEMBOLSO` no `alteracoes`, só quando o formulário traz a caixa);
+    - textarea "O que aconteceu?" só com o indicador "Outros" (`ehOutros`: texto da opção começa com "Outro"). Trocar o indicador limpa a descrição;
+    - Lista, XLSX (recorte "Finalizados sem entrega") e planilha Google ganharam as colunas da finalização e a descrição do indicador. O CSV da Lista passou a formatar a data do retorno, que antes saía crua;
+    - `INDICA_PADRAO` ganhou `7=Outros`.
+  - **Testado** com a API falsa do comunicado, copiada no scratchpad com PUT e 3 finalizados, e Edge headless: 29 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi conferida no Node (`vm`) com a mesma API. Pacotes regerados em 24/11 17:40. **API não compilada nem testada no Protheus.**
+
 ## Pendências
+- **24/11/2026 (5ª), finalização sem entrega:**
+  1. Compilar `RESTLOGREL.tlpp` `2026-11-24b` e o `logrel.app` na homologação e depois na produção. A `24b` inclui o diagnóstico da `24a`.
+  2. **Criar a opção `7=Outros` no combo (X3_CBOX) do `C5_ZINDICA`** pelo Configurador, nas duas bases. Sem ela, o "Outros" não aparece: a tela usa o combo do SX3.
+  3. Na produção, finalizar o **000650** e o **003050** como extravio, com o reembolso de cada um. O 002731 está lançado como retorno "Outros" com reenvio no 003220; pode ficar assim ou passar para extravio (apagar o retorno e marcar finalizado).
+  4. Colar o `planilha/Codigo.gs` novo no Apps Script.
 - **24/11/2026, feito (informado pelo usuário):** a produção está compilada (API `2026-11-23b` e `logrel.app` de 24/11) e a planilha Google está ativa. As pendências de 22/11 e 23/11 sobre a compilação na produção e a planilha ficam resolvidas.
 - **24/11/2026, projeto da logística reversa começou** (ver `IDEIAS-REVERSA-E-CTE.md`).
-  - API `2026-11-24a`: rota só de leitura `GET /logistica/reversa/diagnostico` (`getVsLogRevDiag`, `DiagReversa`, `DiagLinhas`, `Faltam`). Nada mais mudou na API, e a tela não muda. **A compilar na homologação** (base com cópia da produção até agosto de 2026); depois, ler de fora com o usuário de consulta da homologação e analisar. Os números servem de ordem de grandeza.
+  - API `2026-11-24a`: rota só de leitura `GET /logistica/reversa/diagnostico` (`getVsLogRevDiag`, `DiagReversa`, `DiagLinhas`, `Faltam`). Nada mais mudou na API, e a tela não muda. **Compilada pelo usuário na homologação em 24/11** (base com cópia da produção até agosto de 2026) e lida de fora com o usuário de consulta. O resultado está no `IDEIAS-REVERSA-E-CTE.md`. Os números servem de ordem de grandeza.
   - Próximo passo, depois do diagnóstico: o **beta do cadastro da coleta**, que o usuário aprovou para melhorar depois.
 - **23/11/2026:**
   1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). O `logrel.app` da 2ª rodada (coluna Enviados hoje, cartões que filtram, filtro do Não saíram) também foi **compilado pelo usuário em 23/11**. Números esperados na tela, calculados pela API às 21:45 com as regras da tela:

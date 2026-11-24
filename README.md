@@ -100,9 +100,10 @@ O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela c
 - dados do pedido para a NF-e (transportadora, volume, espécie, peso líquido e peso bruto), antes da nota. O frete destacado e o não destacado aparecem só para consulta;
 - datas: saída programada (`C5_FECENT`, desde 15/11/2026 não preenche mais a data de envio), envio, previsão da transportadora e entrega, cada uma com o botão "Hoje";
 - tipo de material;
-- reentrega e indicador de atraso;
+- reentrega e indicador de atraso. Com o indicador **Outros** (opção `7=Outros` no combo do `C5_ZINDICA`, desde 24/11/2026), aparece o campo obrigatório "O que aconteceu?";
 - observações da entrega (`C5_ZOBS`), texto livre;
-- retorno: data, motivo, pedido do reenvio e **observação do retorno** (texto livre, desde 23/11/2026; só com a data do retorno). A observação **não é campo da SC5**: cada gravação vira uma linha da ZLH com o texto no `ZLH_OBS` (veja [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh)).
+- retorno: data, motivo, pedido do reenvio e **observação do retorno** (texto livre, desde 23/11/2026; só com a data do retorno). A observação **não é campo da SC5**: cada gravação vira uma linha da ZLH com o texto no `ZLH_OBS` (veja [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh));
+- **finalizar sem entrega** (desde 24/11/2026): a caixa "Pedido finalizado sem data de entrega" encerra o pedido que não vai ter entrega. Pede o motivo (Extravio, Enviado em outro pedido ou Outro motivo) e a data (no extravio, a data do extravio; começa em hoje). Também aceita o pedido que levou a mercadoria (obrigatório em "Enviado em outro pedido") e uma observação (obrigatória em "Outro motivo"). No **extravio** ainda há o reembolso (Pendente, Reembolsado ou Sem reembolso), o valor e a data do reembolso. O pedido vai para a coluna **Retornados e finalizados**, sai da Programação e do % no prazo. Extravio sem reembolso resolvido aparece no cartão **Reembolsos pendentes**. Desmarcar a caixa apaga os dados e devolve o pedido à etapa dele. Também ficam na ZLH, não na SC5.
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
@@ -310,7 +311,29 @@ A exclusão é lógica: a linha fica no banco, marcada como excluída, e o núme
 - Cada gravação da observação é uma linha da ZLH: `ZLH_CAMPO = OBSRET`, texto inteiro no `ZLH_OBS` e resumo em antes/depois (`ZLH_VALANT`/`ZLH_VALNOV`, até 250 caracteres), para aparecer no Histórico de alterações.
 - A tela mostra a linha mais recente do pedido. Apagar a observação grava uma linha de exclusão com o texto vazio.
 - O `ZLH_OBS` pode ser caracter ou memo: a API lê o memo real (BLOB/CLOB) e só limita o tamanho no caracter.
-- Sem a ZLH ou sem o `ZLH_OBS` no ambiente, o campo fica desligado na tela e aparece em "Campos que faltam" no Diagnóstico. **Na produção, o `ZLH_OBS` tem que ser criado igual ao da homologação.**
+- Sem a ZLH ou sem o `ZLH_OBS` no ambiente, o campo fica desligado na tela e aparece em "Campos que faltam" no Diagnóstico. O `ZLH_OBS` existe nas duas bases (C 250; na produção, conferido pela API em 24/11/2026).
+
+**Finalização sem entrega e indicador "Outros" na ZLH** (API `2026-11-24b`, pedido do usuário: nada de campo novo na SC5). Mesmo caminho da observação do retorno, um `ZLH_CAMPO` por informação, com o valor **cru** no `ZLH_OBS` e o resumo legível em antes/depois para o Histórico. Vale a linha mais recente de cada pedido e campo.
+
+| Chave do PUT/GET | `ZLH_CAMPO` | Valor no `ZLH_OBS` |
+|---|---|---|
+| `finalizado` | `FINALIZ` | `S` ou vazio |
+| `motivoFinal` | `FINMOT` | `E` Extravio, `P` Enviado em outro pedido, `O` Outro motivo |
+| `dataFinal` | `FINDATA` | AAAAMMDD |
+| `pedidoFinal` | `FINPED` | número do pedido (completa os zeros; existe e é outro) |
+| `reembolso` | `REEMB` | `P` Pendente, `S` Reembolsado, `N` Sem reembolso |
+| `valorReembolso` | `REEMBVL` | 1234.56 |
+| `dataReembolso` | `REEMBDT` | AAAAMMDD |
+| `obsFinal` | `FINOBS` | texto |
+| `obsIndicador` | `OBSIND` | texto (indicador "Outros") |
+| `obsRetorno` | `OBSRET` | texto (desde 23/11/2026) |
+
+Os combos de motivo e reembolso são fixos na API (`FIN_MOTIVOS`, `FIN_REEMB`) e vão em `opcoes.motivoFinal`/`opcoes.reembolso` do GET. Regras do PUT (as mesmas da tela), com erro 400 `FINALIZACAO_INVALIDA` ou `SEM_FINALIZADO`:
+- os dados da finalização só valem com `finalizado` = S;
+- finalizado exige motivo e data (≥ emissão), e não vale com data do retorno nem com data de entrega;
+- extravio exige envio, e a data do extravio tem que ser ≥ envio;
+- "Enviado em outro pedido" exige o pedido; "Outro motivo" exige a observação;
+- reembolso só no extravio; data do reembolso só com Reembolsado e ≥ extravio.
 
 **Importação por planilha:** continua. O CTE e o valor do envio e da reentrega vão para a 1ª cobrança de Envio e de Reentrega do pedido na ZLC, criada se não existir. O histórico marca essas linhas como importação.
 

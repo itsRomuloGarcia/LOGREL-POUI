@@ -40,6 +40,8 @@ const QUADROS = {
   env: { nome: "Enviado", ordem: 2, cor: "#6fa8dc" },
   ent: { nome: "Entregue", ordem: 3, cor: "#274e13" },
   ret: { nome: "Retornou", ordem: 4, cor: "#b7b7b7" },
+  // finalizado sem data de entrega: extravio, enviado em outro pedido, outro motivo (24/11/2026)
+  fin: { nome: "Finalizado", ordem: 5, cor: "#e6cfb8" },
 };
 const PRAZOS = {
   noprazo: { nome: "No prazo", cor: "#d9ead3" },
@@ -64,8 +66,11 @@ const OPCOES_PADRAO = {
     ["4", "Entrega agendada"],
     ["5", "Retido fiscalização"],
     ["6", "Extravio"],
+    ["7", "Outros"],
   ],
   motivoRetorno: [["1", "Recusa"], ["2", "Endereço"], ["3", "Avaria"], ["4", "Outros"]],
+  motivoFinal: [["E", "Extravio"], ["P", "Enviado em outro pedido"], ["O", "Outro motivo"]],
+  reembolso: [["P", "Pendente"], ["S", "Reembolsado"], ["N", "Sem reembolso"]],
   tipoPedido: [
     ["AST", "Assis. técnica"], ["COM", "Comodato"], ["LOC", "Locação"], ["REM", "Remessa"],
     ["TRC", "Troca"], ["VAV", "Venda avulsa"], ["VEN", "Venda"],
@@ -178,7 +183,8 @@ function montar_(p, ctx) {
   const reent = p.reentrega === "SIM";
   const entFinal = reent ? p.dataNovaEntrega : p.dataEntrega;
   // retorno vem antes de tudo: a mercadoria voltou, mesmo com data de entrega
-  const et = p.dataRetorno ? "ret" : entFinal ? "ent" : p.dataEnvio ? "env" : temNota ? "fat" : "prev";
+  // finalizado sem entrega (24/11/2026) encerra o pedido sem a data de entrega
+  const et = p.dataRetorno ? "ret" : entFinal ? "ent" : p.finalizado === "S" ? "fin" : p.dataEnvio ? "env" : temNota ? "fat" : "prev";
   let prazo = "";
   let atraso = null;
   const prev = dt_(p.dataPrevisao);
@@ -223,7 +229,17 @@ const PEND_TXT = {
   envio: "data de envio", previsao: "previsão de entrega", entrega: "data de entrega",
   novaData: "nova data de entrega", cte: "CTE ou custo de frete", tpmat: "tipo de material",
   indicador: "indicador de atraso", motivo: "motivo do retorno", reenvio: "pedido do reenvio",
+  descInd: "descrição do indicador", reembolso: "reembolso do extravio",
 };
+// Indicador "Outros" (opcao cujo texto comeca com "Outro") e extravio sem reembolso resolvido
+function indOutros_(ctx, cod) {
+  if (!cod) return false;
+  const t = txtOp_(ctx, "indicador", cod).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+  return t.indexOf("OUTR") === 0;
+}
+function reembolsoPendente_(p) {
+  return p.finalizado === "S" && p.motivoFinal === "E" && p.reembolso !== "S" && p.reembolso !== "N";
+}
 function pendencias_(p, et, prazo, ctx) {
   const falta = ctx.resp.camposFaltando || [];
   const tem = (c) => falta.indexOf(c) < 0;
@@ -243,11 +259,13 @@ function pendencias_(p, et, prazo, ctx) {
     if (ctx.temCustos ? !(p.custos || []).length : tem("C5_ZCTE") && !p.cte) out.push("cte");
     if (tem("C5_ZTPMAT") && !p.tipoMaterial) out.push("tpmat");
     if (prazo === "atrasado" && tem("C5_ZINDICA") && !p.indicador) out.push("indicador");
+    if (tem("ZLH_OBS") && indOutros_(ctx, p.indicador) && !(p.obsIndicador || "").trim()) out.push("descInd");
   }
   if (et === "ret") {
     if (tem("C5_ZMOTRET") && !p.motivoRetorno) out.push("motivo");
     if (tem("C5_ZPEDREN") && !p.pedidoReenvio) out.push("reenvio");
   }
+  if (et === "fin" && reembolsoPendente_(p)) out.push("reembolso");
   return out;
 }
 
@@ -308,6 +326,14 @@ function colunasPedidos_(ctx) {
     ["Motivo do retorno", "gen", (r) => txtOp_(ctx, "motivoRetorno", r.p.motivoRetorno || "")],
     ["Pedido do reenvio", "txt", (r) => r.p.pedidoReenvio || ""],
     ["Observação do retorno", "gen", (r) => r.p.obsRetorno || ""],
+    ["Finalizado sem entrega", "gen", (r) => (r.p.finalizado === "S" ? txtOp_(ctx, "motivoFinal", r.p.motivoFinal || "") || "Sim" : "")],
+    ["Data da finalização", "data", (r) => (r.p.finalizado === "S" ? r.p.dataFinal || "" : "")],
+    ["Enviado no pedido", "txt", (r) => (r.p.finalizado === "S" ? r.p.pedidoFinal || "" : "")],
+    ["Reembolso do extravio", "gen", (r) => (r.p.finalizado === "S" && r.p.motivoFinal === "E" ? txtOp_(ctx, "reembolso", r.p.reembolso || "") || "Pendente" : "")],
+    ["Valor do reembolso", "moeda", (r) => (r.p.finalizado === "S" && r.p.valorReembolso ? r.p.valorReembolso : "")],
+    ["Data do reembolso", "data", (r) => (r.p.finalizado === "S" ? r.p.dataReembolso || "" : "")],
+    ["Observação da finalização", "gen", (r) => (r.p.finalizado === "S" ? r.p.obsFinal || "" : "")],
+    ["Indicador: o que aconteceu", "gen", (r) => r.p.obsIndicador || ""],
     ["Volume", "int", (r) => r.p.volume || ""],
     ["Espécie", "gen", (r) => r.p.especie || ""],
     ["Peso líquido", "peso", (r) => r.p.pesoLiquido || ""],
@@ -539,6 +565,7 @@ function gravarResumo_(regs, ctx) {
       conta((r) => r.et === "fat" && r.p.dataFaturamento && dias_(dt_(r.p.dataFaturamento), ctx.hoje) > DIAS_FAT_PARADO),
     ],
     ["Retornados aguardando reenvio", conta((r) => r.et === "ret" && !r.p.pedidoReenvio)],
+    ["Extravios com reembolso pendente", conta((r) => r.et === "fin" && reembolsoPendente_(r.p))],
     ["Pedidos com informação faltando (coluna Informação faltando)", conta((r) => r.pend.length > 0)],
     ["Saíram hoje", conta((r) => r.p.dataEnvio === hojeIso)],
   ];

@@ -132,6 +132,21 @@ export interface Pedido {
   obsEntrega?: string;
   /** Observacao do retorno a empresa: ultima linha OBSRET da ZLH (ZLH_OBS); API >= 2026-11-23b */
   obsRetorno?: string;
+  /** Finalizado sem data de entrega (extravio, enviado em outro pedido, outro motivo):
+   *  linhas da ZLH, nao campos da SC5 (pedido do usuario); API >= 2026-11-24b */
+  finalizado?: string;
+  /** E extravio, P enviado em outro pedido, O outro motivo */
+  motivoFinal?: string;
+  dataFinal?: string;
+  /** pedido em que a mercadoria foi (reenvio) */
+  pedidoFinal?: string;
+  /** extravio: P pendente, S reembolsado, N sem reembolso */
+  reembolso?: string;
+  valorReembolso?: number;
+  dataReembolso?: string;
+  obsFinal?: string;
+  /** o que aconteceu, quando o indicador de atraso e "Outros" (ZLH) */
+  obsIndicador?: string;
   /** C5_MENNOTA: mensagem para a nota (so leitura); API >= 2026-11-23a */
   mensagemNota?: string;
   /** Endereco do cliente de entrega (A1_END, A1_COMPLEM, A1_BAIRRO, A1_CEP; A2_* na devolucao); API >= 2026-11-23a */
@@ -157,7 +172,7 @@ export interface LogResposta {
   ate: string;
   /** Campos da SC5 que ainda nao existem no ambiente (vem vazios e nao editam) */
   camposFaltando: string[];
-  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[]; tipoCusto?: Opcao[]; situacaoCusto?: Opcao[] };
+  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[]; tipoCusto?: Opcao[]; situacaoCusto?: Opcao[]; motivoFinal?: Opcao[]; reembolso?: Opcao[] };
   /** Tabela de custos de frete (ZLC) existe: o CTE sai da SC5 e vira lista de cobrancas */
   temCustos?: boolean;
   /** Tabela de historico (ZLH) existe */
@@ -197,6 +212,16 @@ export interface PedidoEdicao {
   obsEntrega?: string;
   /** Observacao do retorno (grava uma linha na ZLH): so com a data do retorno (API >= 2026-11-23b) */
   obsRetorno?: string;
+  /** Finalizacao sem entrega e descricao do indicador "Outros": linhas da ZLH (API >= 2026-11-24b) */
+  finalizado?: string;
+  motivoFinal?: string;
+  dataFinal?: string;
+  pedidoFinal?: string;
+  reembolso?: string;
+  valorReembolso?: number;
+  dataReembolso?: string;
+  obsFinal?: string;
+  obsIndicador?: string;
 }
 
 @Injectable({ providedIn: 'root' })

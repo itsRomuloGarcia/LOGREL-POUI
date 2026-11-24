@@ -31,7 +31,7 @@ export interface Api {
 }
 
 // ---------- regras ----------
-type Etapa = 'prev' | 'fat' | 'env' | 'ent' | 'ret';
+type Etapa = 'prev' | 'fat' | 'env' | 'ent' | 'ret' | 'fin';
 type Prazo = 'noprazo' | 'vence' | 'atrasado' | 'semprev' | '';
 
 const ETAPAS: { id: Etapa; nome: string; curto: string; desc: string; cor: string }[] = [
@@ -41,7 +41,13 @@ const ETAPAS: { id: Etapa; nome: string; curto: string; desc: string; cor: strin
   { id: 'ent', nome: 'Pedidos entregues', curto: 'Entregue', desc: 'Entrega confirmada', cor: G.CAT[2] },
   // mercadoria voltou para a empresa; o reenvio sai em outro pedido (13/11/2026)
   { id: 'ret', nome: 'Pedidos retornados', curto: 'Retornou', desc: 'Voltaram para a empresa', cor: G.COR_OUTROS },
+  // finalizado sem data de entrega: extravio, enviado em outro pedido, outro motivo
+  // (24/11/2026). Nos Quadros fica na mesma coluna dos retornados.
+  { id: 'fin', nome: 'Finalizados sem entrega', curto: 'Finalizado', desc: 'Extravio, enviado em outro pedido ou outro motivo', cor: '#c9a27e' },
 ];
+/** Colunas dos Quadros: os finalizados entram na coluna dos retornados */
+const COLUNAS_QUADRO = ETAPAS.filter((e) => e.id !== 'fin');
+const COL_RET = { nome: 'Retornados e finalizados', desc: 'Voltaram para a empresa ou foram finalizados sem entrega' };
 /** C5_TIPO diferente de N (os Previstos trazem todos os pedidos sem NF) */
 const TIPO_NF: Record<string, string> = { D: 'Devolução', B: 'Beneficiamento', C: 'Compl. preço', I: 'Compl. ICMS', P: 'Compl. IPI' };
 const ET = Object.fromEntries(ETAPAS.map((e) => [e.id, e])) as Record<Etapa, (typeof ETAPAS)[number]>;
@@ -68,9 +74,15 @@ const INDICA_PADRAO: Opcao[] = [
   ['4', 'Entrega agendada'],
   ['5', 'Retido fiscalização'],
   ['6', 'Extravio'],
+  ['7', 'Outros'],
 ];
 /** C5_ZMOTRET informado pelo usuario em 13/11/2026 */
 const MOTRET_PADRAO: Opcao[] = [['1', 'Recusa'], ['2', 'Endereço'], ['3', 'Avaria'], ['4', 'Outros']];
+/** Finalizacao sem entrega (ZLH, fixas na API 2026-11-24b) */
+const MOTFIN_PADRAO: Opcao[] = [['E', 'Extravio'], ['P', 'Enviado em outro pedido'], ['O', 'Outro motivo']];
+const REEMB_PADRAO: Opcao[] = [['P', 'Pendente'], ['S', 'Reembolsado'], ['N', 'Sem reembolso']];
+/** Indicador de atraso "Outros": opcao do C5_ZINDICA cujo texto comeca com "Outro" */
+const ehOutros = (txt: string) => /^OUTR/.test(normal(txt || ''));
 /** Custos de frete (ZLC_TIPO / ZLC_SITUA), usados so se o SX3 nao mandar o combo */
 const TIPOCUSTO_PADRAO: Opcao[] = [['E', 'Envio'], ['R', 'Reentrega'], ['A', 'Armazenagem'], ['D', 'Devolução'], ['O', 'Outra taxa']];
 const SITCUSTO_PADRAO: Opcao[] = [['D', 'Divergente'], ['C', 'Em contato'], ['A', 'Ajustado'], ['I', 'Aceito como veio']];
@@ -121,8 +133,22 @@ const CAMPO: Record<keyof PedidoEdicao, string> = {
   obsEntrega: 'C5_ZOBS',
   /** observacao do retorno: linha da ZLH (ZLH_OBS), nao campo da SC5 (23/11/2026) */
   obsRetorno: 'ZLH_OBS',
+  /** finalizacao sem entrega e descricao do indicador "Outros": linhas da ZLH (24/11/2026) */
+  finalizado: 'ZLH_OBS',
+  motivoFinal: 'ZLH_OBS',
+  dataFinal: 'ZLH_OBS',
+  pedidoFinal: 'ZLH_OBS',
+  reembolso: 'ZLH_OBS',
+  valorReembolso: 'ZLH_OBS',
+  dataReembolso: 'ZLH_OBS',
+  obsFinal: 'ZLH_OBS',
+  obsIndicador: 'ZLH_OBS',
 };
-const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado', 'pesoLiquido', 'pesoBruto'];
+const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado', 'pesoLiquido', 'pesoBruto', 'valorReembolso'];
+/** Dados da finalizacao sem entrega: so com "finalizado" marcado (apagar desmarca tudo) */
+const FINAL: (keyof PedidoEdicao)[] = ['motivoFinal', 'dataFinal', 'pedidoFinal', 'reembolso', 'valorReembolso', 'dataReembolso', 'obsFinal'];
+/** So no extravio */
+const REEMBOLSO: (keyof PedidoEdicao)[] = ['reembolso', 'valorReembolso', 'dataReembolso'];
 const REENTREGA: (keyof PedidoEdicao)[] = ['cteReentrega', 'valorCteReentrega', 'dataNovaEntrega'];
 /** Dados do pedido que vao para a NF-e: so editam antes da nota (frete destacado e
  *  nao destacado sao so consulta desde 15/11/2026, pedido do usuario) */
@@ -134,11 +160,11 @@ const pesoTxt = (n: number | undefined) => (n ? n.toLocaleString('pt-BR', { mini
 /** So valem com a data do retorno */
 const RETORNO: (keyof PedidoEdicao)[] = ['motivoRetorno', 'pedidoReenvio', 'obsRetorno'];
 /** Textos livres: campo caracter vira uma linha so; memo mantem as quebras */
-const OBS: (keyof PedidoEdicao)[] = ['obsEntrega', 'obsRetorno'];
+const OBS: (keyof PedidoEdicao)[] = ['obsEntrega', 'obsRetorno', 'obsFinal', 'obsIndicador'];
 
 /** Informacao que falta no pedido (pedido do usuario em 23/11/2026): filtro de
  *  cada quadro, selo "Falta" no cartao e card no topo. [texto do filtro, selo] */
-type Pend = 'transp' | 'volume' | 'especie' | 'peso' | 'envio' | 'previsao' | 'entrega' | 'novaData' | 'cte' | 'tpmat' | 'indicador' | 'motivo' | 'reenvio';
+type Pend = 'transp' | 'volume' | 'especie' | 'peso' | 'envio' | 'previsao' | 'entrega' | 'novaData' | 'cte' | 'tpmat' | 'indicador' | 'descInd' | 'motivo' | 'reenvio' | 'reembolso';
 const PEND_TXT: Record<Pend, [string, string]> = {
   transp: ['Sem transportadora', 'transportadora'],
   volume: ['Sem volume', 'volume'],
@@ -151,13 +177,29 @@ const PEND_TXT: Record<Pend, [string, string]> = {
   cte: ['Sem CTE / custo de frete lançado', 'CTE ou custo de frete'],
   tpmat: ['Sem tipo de material', 'tipo de material'],
   indicador: ['Atrasado sem indicador de atraso', 'indicador de atraso'],
+  descInd: ['Indicador "Outros" sem descrição', 'descrição do indicador'],
   motivo: ['Sem motivo do retorno', 'motivo do retorno'],
   reenvio: ['Sem pedido do reenvio', 'pedido do reenvio'],
+  reembolso: ['Extravio com reembolso pendente', 'reembolso do extravio'],
 };
 const PEND_ORDEM = Object.keys(PEND_TXT) as Pend[];
 /** Faturado sem envio: pendente depois de N dias com NF (igual ao card "Faturados parados") */
 const DIAS_FAT_PARADO = 2;
-const ROTULO: Record<string, string> = Object.fromEntries(DESTINOS.filter(([d]) => d && d !== 'pedido'));
+const ROTULO: Record<string, string> = {
+  ...Object.fromEntries(DESTINOS.filter(([d]) => d && d !== 'pedido')),
+  finalizado: 'Finalizado sem entrega',
+  motivoFinal: 'Motivo da finalização',
+  dataFinal: 'Data da finalização',
+  pedidoFinal: 'Enviado no pedido',
+  reembolso: 'Reembolso do extravio',
+  valorReembolso: 'Valor do reembolso',
+  dataReembolso: 'Data do reembolso',
+  obsFinal: 'Observação da finalização',
+  obsIndicador: 'O que aconteceu (indicador Outros)',
+};
+type TipoOp = 'tipoMaterial' | 'indicador' | 'tipoPedido' | 'motivoRetorno' | 'motivoFinal' | 'reembolso';
+/** Data que encerra o pedido na coluna Retornados e finalizados */
+const dataFim = (r: Reg) => (r.et === 'fin' ? r.p.dataFinal || '' : r.p.dataRetorno || '');
 
 /** Ordem de cada quadro: [id, texto, data usada, crescente] */
 const ORD_QUADRO: Record<Etapa, [string, string, (r: Reg) => string, boolean][]> = {
@@ -181,11 +223,13 @@ const ORD_QUADRO: Record<Etapa, [string, string, (r: Reg) => string, boolean][]>
     ['ent-desc', 'Entrega: mais recentes primeiro', (r) => r.entFinal, false],
     ['ent-asc', 'Entrega: mais antigas primeiro', (r) => r.entFinal, true],
   ],
+  // coluna Retornados e finalizados: data do retorno ou da finalizacao
   ret: [
-    ['aguarda', 'Aguardando reenvio primeiro (mais antigos)', (r) => (r.p.pedidoReenvio ? '1' : '0') + (r.p.dataRetorno || ''), true],
-    ['ret-desc', 'Retorno: mais recentes primeiro', (r) => r.p.dataRetorno || '', false],
-    ['ret-asc', 'Retorno: mais antigos primeiro', (r) => r.p.dataRetorno || '', true],
+    ['aguarda', 'Pendentes primeiro', (r) => (r.pend.length ? '0' : '1') + dataFim(r), true],
+    ['ret-desc', 'Mais recentes primeiro', dataFim, false],
+    ['ret-asc', 'Mais antigos primeiro', dataFim, true],
   ],
+  fin: [['fin-desc', 'Mais recentes primeiro', dataFim, false]],
 };
 
 /** Pedidos enviados agregados por transportadora (ranking e comparacao) */
@@ -411,11 +455,11 @@ export class Painel {
       ate: dt(ate) || this.hoje,
       ord: { k: '', asc: false },
       limite: 200,
-      limQuadro: { prev: LIMITE_CARTOES, fat: LIMITE_CARTOES, env: LIMITE_CARTOES, ent: LIMITE_CARTOES, ret: LIMITE_CARTOES },
+      limQuadro: { prev: LIMITE_CARTOES, fat: LIMITE_CARTOES, env: LIMITE_CARTOES, ent: LIMITE_CARTOES, ret: LIMITE_CARTOES, fin: LIMITE_CARTOES },
       entTodos: false,
       // a preferencia guardada antes da coluna Retornados nao tem "ret"
-      ordQuadro: { prev: 'emi-asc', fat: 'fat-asc', env: 'prev-asc', ent: 'ent-desc', ret: 'aguarda', ...ler('ord-quadro', {}) },
-      fQuadro: { prev: '', fat: '', env: '', ent: '', ret: '' },
+      ordQuadro: { prev: 'emi-asc', fat: 'fat-asc', env: 'prev-asc', ent: 'ent-desc', ret: 'aguarda', fin: 'fin-desc', ...ler('ord-quadro', {}) },
+      fQuadro: { prev: '', fat: '', env: '', ent: '', ret: '', fin: '' },
       fGlobal: '',
       medida: ler('medida', 'custo'),
       ordRank: { k: 'env', asc: false },
@@ -618,7 +662,8 @@ export class Painel {
     const reent = p.reentrega === 'SIM';
     const entFinal = reent ? p.dataNovaEntrega : p.dataEntrega;
     // retorno vem antes de tudo: a mercadoria voltou, mesmo que tenha data de entrega
-    const et: Etapa = p.dataRetorno ? 'ret' : entFinal ? 'ent' : p.dataEnvio ? 'env' : temNota ? 'fat' : 'prev';
+    // finalizado sem entrega (24/11/2026): encerra o pedido sem a data de entrega
+    const et: Etapa = p.dataRetorno ? 'ret' : entFinal ? 'ent' : p.finalizado === 'S' ? 'fin' : p.dataEnvio ? 'env' : temNota ? 'fat' : 'prev';
     let prazo: Prazo = '';
     let atraso: number | null = null;
     const prev = dt(p.dataPrevisao);
@@ -655,7 +700,7 @@ export class Painel {
       parcial: temNota && itens.some((i) => !i.nota),
       produtos,
       busca: normal(
-        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, p.obsRetorno, p.mensagemNota, p.enderecoEntrega, p.bairroEntrega, p.telefone, p.telefoneCliente, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
+        [p.pedido, p.nome, p.fantasia, p.cidade, p.uf, p.transportadoraNome, p.vendedor, p.grupo, ...ctes, ...(p.notas || []), produtos, p.nomeEntrega, p.pedidoReenvio, p.obsEntrega, p.obsRetorno, p.pedidoFinal, p.obsFinal, p.obsIndicador, p.mensagemNota, p.enderecoEntrega, p.bairroEntrega, p.telefone, p.telefoneCliente, ...itens.flatMap((i) => (i.numerosSerie || []).map((s) => s[0]))].join(' '),
       ),
     };
   }
@@ -681,12 +726,24 @@ export class Painel {
       if (this.temCustos ? !(p.custos || []).length : tem(CAMPO.cte) && !p.cte) out.push('cte');
       if (tem(CAMPO.tipoMaterial) && !p.tipoMaterial) out.push('tpmat');
       if (prazo === 'atrasado' && tem(CAMPO.indicador) && !p.indicador) out.push('indicador');
+      if (tem(CAMPO.obsIndicador) && this.indOutros(p.indicador) && !(p.obsIndicador || '').trim()) out.push('descInd');
     }
     if (et === 'ret') {
       if (tem(CAMPO.motivoRetorno) && !p.motivoRetorno) out.push('motivo');
       if (tem(CAMPO.pedidoReenvio) && !p.pedidoReenvio) out.push('reenvio');
     }
+    if (et === 'fin' && this.reembolsoPendente(p)) out.push('reembolso');
     return out;
+  }
+
+  /** Indicador de atraso escolhido e a opcao "Outros" (pede a descricao) */
+  private indOutros(cod: string | undefined): boolean {
+    return !!cod && ehOutros(this.txtOp('indicador', cod));
+  }
+
+  /** Extravio ainda sem reembolso resolvido (vazio ou Pendente) */
+  private reembolsoPendente(p: Pedido): boolean {
+    return p.finalizado === 'S' && p.motivoFinal === 'E' && p.reembolso !== 'S' && p.reembolso !== 'N';
   }
 
   /** Endereco de entrega numa linha: rua, complemento, bairro, cidade/UF e CEP */
@@ -707,12 +764,13 @@ export class Painel {
   }
 
   // ---------- opcoes ----------
-  private op(k: 'tipoMaterial' | 'indicador' | 'tipoPedido' | 'motivoRetorno'): Opcao[] {
+  private op(k: TipoOp): Opcao[] {
     const v = this.resp?.opcoes?.[k] || [];
     if (v.length) return v;
-    return k === 'tipoMaterial' ? TPMAT_PADRAO : k === 'indicador' ? INDICA_PADRAO : k === 'motivoRetorno' ? MOTRET_PADRAO : TIPOPED_PADRAO;
+    const padrao: Record<TipoOp, Opcao[]> = { tipoMaterial: TPMAT_PADRAO, indicador: INDICA_PADRAO, motivoRetorno: MOTRET_PADRAO, tipoPedido: TIPOPED_PADRAO, motivoFinal: MOTFIN_PADRAO, reembolso: REEMB_PADRAO };
+    return padrao[k];
   }
-  private txtOp(k: 'tipoMaterial' | 'indicador' | 'tipoPedido' | 'motivoRetorno', cod: string): string {
+  private txtOp(k: TipoOp, cod: string): string {
     if (!cod) return '';
     const o = this.op(k).find((x) => x[0] === cod);
     return o ? o[1] : cod;
@@ -857,10 +915,12 @@ export class Painel {
     const cardAtivo = cards.find((c) => c.id === g);
     const visiveis = cardAtivo ? regs.filter(cardAtivo.f) : regs;
     const limEnt = new Date(this.hoje.getTime() - DIAS_ENTREGUES * 86400000);
-    const cols = ETAPAS.map((et) => {
+    const cols = COLUNAS_QUADRO.map((et0) => {
+      // a coluna dos retornados tambem mostra os finalizados sem entrega (24/11/2026)
+      const et = et0.id === 'ret' ? { ...et0, ...COL_RET } : et0;
       const opcoes = ORD_QUADRO[et.id];
       const [, , chave, asc] = opcoes.find((o) => o[0] === this.e.ordQuadro[et.id]) || opcoes[0];
-      const daEtapa = visiveis.filter((r) => r.et === et.id);
+      const daEtapa = visiveis.filter((r) => r.et === et.id || (et.id === 'ret' && r.et === 'fin'));
       // filtro da coluna: so as opcoes que tem pedido (e a escolhida, mesmo zerada)
       const fq = this.e.fQuadro[et.id];
       const nPend = daEtapa.filter((r) => r.pend.length).length;
@@ -950,6 +1010,12 @@ export class Painel {
     if (!PARA_NFE.every((k) => this.faltando.has(CAMPO[k])))
       out.push({ id: 'nfe', r: 'Sem dados para a NF-e', s: 'sem NF e falta espécie, peso líquido ou bruto', f: (r) => this.faltaNfe(r.p).length > 0, crit: true });
     out.push({ id: 'aguarda', r: 'Aguardando reenvio', s: 'voltaram e ainda sem o pedido do reenvio', f: (r) => r.et === 'ret' && !r.p.pedidoReenvio, crit: true });
+    // extravio finalizado sem reembolso resolvido (24/11/2026)
+    if (!this.faltando.has(CAMPO.reembolso)) {
+      const pendR = regs.filter((r) => r.et === 'fin' && this.reembolsoPendente(r.p));
+      const vR = pendR.reduce((s, r) => s + (r.p.valorReembolso || 0), 0);
+      out.push({ id: 'reemb', r: 'Reembolsos pendentes', s: pendR.length ? `extravios ainda sem reembolso${vR ? ` · ${rs0(vR)} informados` : ''}` : 'nenhum extravio aguardando reembolso', f: (r) => r.et === 'fin' && this.reembolsoPendente(r.p), crit: true });
+    }
     if (this.temCustos)
       out.push({ id: 'custodiv', r: 'Custo de frete em divergência', s: div.length ? `pedidos em contato com a transportadora${dif ? ` · ${rs0(dif)} acima do esperado` : ''}` : 'nenhuma cobrança divergente', f: (r) => r.nDiv > 0, crit: true });
     return out;
@@ -982,7 +1048,8 @@ export class Painel {
     if (r.parcial) pills.push(`<span class="pill semprev">NF parcial</span>`);
     if (r.et === 'ret' && !p.pedidoReenvio) pills.push(`<span class="pill atrasado">Aguardando reenvio</span>`);
     if (r.et === 'ret' && p.motivoRetorno) pills.push(`<span class="pill semprev">${esc(this.txtOp('motivoRetorno', p.motivoRetorno))}</span>`);
-    const falta = r.pend.filter((k) => k !== 'reenvio');
+    if (r.et === 'fin') pills.push(...this.pillsFinal(p));
+    const falta = r.pend.filter((k) => k !== 'reenvio' && k !== 'reembolso');
     if (falta.length) {
       const lista = falta.map((k) => PEND_TXT[k][1]).join(', ');
       pills.push(`<span class="pill falta" title="Falta: ${esc(lista)}">${esc(falta.length === 1 ? `Falta ${PEND_TXT[falta[0]][1]}` : `Faltam ${falta.length} informações`)}</span>`);
@@ -992,6 +1059,8 @@ export class Painel {
     else if (r.et === 'fat') datas = `NF ${esc((p.notas || []).join(', '))} · ${fmtCurto(p.dataFaturamento)}${p.dataFaturamento ? ` (há ${dias(dt(p.dataFaturamento) as Date, this.hoje)} d)` : ''}`;
     else if (r.et === 'env') datas = `Envio ${fmtCurto(p.dataEnvio)} · Previsão ${p.dataPrevisao ? fmtCurto(p.dataPrevisao) : '–'}`;
     else if (r.et === 'ret') datas = `Retornou ${fmtCurto(p.dataRetorno || '')} (há ${dias(dt(p.dataRetorno || '') as Date, this.hoje)} d)${p.pedidoReenvio ? ` · Reenvio no pedido ${esc(p.pedidoReenvio)}` : ''}`;
+    else if (r.et === 'fin')
+      datas = `Finalizado ${fmtCurto(p.dataFinal || '')}${p.dataEnvio ? ` · Envio ${fmtCurto(p.dataEnvio)}` : ''}${p.pedidoFinal ? ` · Foi no pedido ${esc(p.pedidoFinal)}` : ''}`;
     else datas = `Entregue ${fmtCurto(r.entFinal)}${p.dataPrevisao ? ` · Previsão ${fmtCurto(p.dataPrevisao)}` : ''}`;
     return `<button type="button" class="cartao" data-ped="${p.recno}" style="--cor:${ET[r.et].cor}">
       <span class="l1"><b class="mono">${esc(p.pedido)}</b>${pills.join('')}</span>
@@ -1000,6 +1069,18 @@ export class Painel {
       <span class="m">${n0(r.qtd)} un · ${rs0(r.valor)}${this.cteTxt(r)}${r.nDiv ? ' · <b class="crit-txt">custo em divergência</b>' : ''}</span>
       <span class="m">${datas}</span>
     </button>`;
+  }
+
+  /** Selos do finalizado sem entrega: motivo e, no extravio, o reembolso */
+  private pillsFinal(p: Pedido): string[] {
+    const out: string[] = [];
+    if (p.motivoFinal) out.push(`<span class="pill ${p.motivoFinal === 'E' ? 'atrasado' : 'semprev'}">${esc(this.txtOp('motivoFinal', p.motivoFinal))}</span>`);
+    if (p.motivoFinal === 'E') {
+      if (this.reembolsoPendente(p)) out.push(`<span class="pill atrasado">Reembolso pendente${p.valorReembolso ? ` · ${rs0(p.valorReembolso)}` : ''}</span>`);
+      else if (p.reembolso === 'S') out.push(`<span class="pill noprazo">Reembolsado${p.valorReembolso ? ` · ${rs0(p.valorReembolso)}` : ''}</span>`);
+      else out.push(`<span class="pill semprev">Sem reembolso</span>`);
+    }
+    return out;
   }
 
   private pillPrazo(r: Reg, curto = false): string {
@@ -1028,7 +1109,8 @@ export class Painel {
 
   private telaProgramacao(): string {
     const hj = iso(this.hoje);
-    const regs = this.base();
+    // finalizado sem entrega nao sai mais: fora da programacao (24/11/2026)
+    const regs = this.base().filter((r) => r.et !== 'fin');
     const apiVelha = !this.resp?.versao || this.resp.versao < '2026-11-15b';
     const dias0 = this.diasProgramacao();
     // fim de semana dentro do periodo so aparece se tiver pedido programado
@@ -1309,6 +1391,12 @@ export class Painel {
       { k: 'dret', t: 'Retorno', v: (r) => r.p.dataRetorno || '', f: d },
       { k: 'motret', t: 'Motivo do retorno', v: (r) => this.txtOp('motivoRetorno', r.p.motivoRetorno || '') },
       { k: 'pedren', t: 'Pedido do reenvio', v: (r) => r.p.pedidoReenvio || '' },
+      { k: 'fin', t: 'Finalizado sem entrega', v: (r) => (r.p.finalizado === 'S' ? this.txtOp('motivoFinal', r.p.motivoFinal || '') || 'Sim' : ''), tit: 'Extravio, enviado em outro pedido ou outro motivo (ZLH)' },
+      { k: 'dfin', t: 'Data da finalização', v: (r) => (r.p.finalizado === 'S' ? r.p.dataFinal || '' : ''), f: d },
+      { k: 'pedfin', t: 'Enviado no pedido', v: (r) => (r.p.finalizado === 'S' ? r.p.pedidoFinal || '' : '') },
+      { k: 'reemb', t: 'Reembolso', v: (r) => (r.p.finalizado === 'S' && r.p.motivoFinal === 'E' ? this.txtOp('reembolso', r.p.reembolso || '') || 'Pendente' : '') },
+      { k: 'vreemb', t: 'Valor do reembolso', v: (r) => (r.p.finalizado === 'S' ? r.p.valorReembolso || 0 : 0), f: m, dir: true },
+      { k: 'obsind', t: 'Indicador: o que aconteceu', v: (r) => r.p.obsIndicador || '', tit: 'Descrição do indicador "Outros" (ZLH)' },
     ];
   }
 
@@ -1368,7 +1456,7 @@ export class Painel {
       return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const dataBR = (s: string) => fmt(s);
-    const datas = new Set(['emi', 'dfat', 'denv', 'dprev', 'dent', 'dnova']);
+    const datas = new Set(['emi', 'dfat', 'denv', 'dprev', 'dent', 'dnova', 'dret', 'dfin']);
     const txt =
       '﻿' +
       [cols.map((c) => cel(c.t)).join(';'), ...linhas.map(({ r, i }) => cols.map((c) => cel(c.k === 'sit' ? (c.v(r, i) as string) : datas.has(c.k) ? dataBR(String(c.v(r, i))) : c.v(r, i))).join(';'))].join('\r\n');
@@ -1661,8 +1749,12 @@ export class Painel {
     ];
     if (reent) passos.push(['Nova entrega (reentrega)', p.dataNovaEntrega]);
     if (p.dataRetorno) passos.push(['Retorno à empresa', p.dataRetorno]);
-    // este pedido e o reenvio de outro (que voltou)?
-    const origem = this.regs.filter((x) => x.p.pedidoReenvio === p.pedido).map((x) => x.p.pedido);
+    if (p.finalizado === 'S') passos.push([`Finalizado sem entrega${p.motivoFinal ? ` (${this.txtOp('motivoFinal', p.motivoFinal)})` : ''}`, p.dataFinal || '']);
+    if (p.finalizado === 'S' && p.dataReembolso) passos.push(['Reembolso do extravio', p.dataReembolso]);
+    // este pedido e o reenvio de outro (que voltou, extraviou ou foi finalizado)?
+    const origem = this.regs.filter((x) => x.p.pedidoReenvio === p.pedido || (x.p.finalizado === 'S' && x.p.pedidoFinal === p.pedido)).map((x) => x.p.pedido);
+    const finS = p.finalizado === 'S';
+    const zlhOk = !falta('finalizado');
     const tempo = passos
       .map(([t, d]) => `<li class="${d ? '' : 'vazio'}"><b>${esc(t)}</b><br><span class="${d ? '' : 'muted'}">${d ? fmt(d) : 'não informado'}</span></li>`)
       .join('');
@@ -1679,7 +1771,7 @@ export class Painel {
         <header><div>
           <h2>Pedido <span class="mono">${esc(p.pedido)}</span></h2>
           <span class="titulo-item">${esc(p.nome)}</span>
-          <span class="pilha-h"><span class="pill etapa" style="--cor:${ET[r.et].cor}">${esc(ET[r.et].curto)}</span>${this.pillPrazo(r)}${reent ? '<span class="pill reent">Reentrega</span>' : ''}${r.parcial ? '<span class="pill semprev">NF parcial</span>' : ''}${r.et === 'ret' && !p.pedidoReenvio ? '<span class="pill atrasado">Aguardando reenvio</span>' : ''}${origem.length ? `<span class="pill mat">Reenvio do pedido ${esc(origem.join(', '))}</span>` : ''}</span>
+          <span class="pilha-h"><span class="pill etapa" style="--cor:${ET[r.et].cor}">${esc(ET[r.et].curto)}</span>${this.pillPrazo(r)}${reent ? '<span class="pill reent">Reentrega</span>' : ''}${r.parcial ? '<span class="pill semprev">NF parcial</span>' : ''}${r.et === 'ret' && !p.pedidoReenvio ? '<span class="pill atrasado">Aguardando reenvio</span>' : ''}${r.et === 'fin' ? this.pillsFinal(p).join('') : ''}${origem.length ? `<span class="pill mat">Reenvio do pedido ${esc(origem.join(', '))}</span>` : ''}</span>
         </div><button class="fechar" data-acao="fechar" aria-label="Fechar">×</button></header>
         <div class="rolar">
           ${this.barraNotas(p)}
@@ -1703,6 +1795,7 @@ export class Painel {
               ${data('dataEntrega', 'Data de entrega', p.dataEntrega)}
               ${combo('tipoMaterial', 'Tipo de material', this.op('tipoMaterial'), p.tipoMaterial)}
               ${combo('indicador', 'Indicador de atraso', this.op('indicador'), p.indicador)}
+              <div class="campo inteiro" id="lg-obsind" ${this.indOutros(p.indicador) ? '' : 'hidden'}><label for="f-obsIndicador">O que aconteceu? (indicador "Outros")</label><textarea id="f-obsIndicador" data-f="obsIndicador" rows="2" ${tam[CAMPO.obsIndicador] ? `maxlength="${tam[CAMPO.obsIndicador]}"` : ''} placeholder="Descreva o motivo do atraso" ${dis('obsIndicador')} ${tit('obsIndicador')}>${esc(p.obsIndicador || '')}</textarea></div>
               <div class="campo inteiro"><label for="f-obsEntrega">Observações da entrega</label><textarea id="f-obsEntrega" data-f="obsEntrega" rows="3" ${tam[CAMPO.obsEntrega] ? `maxlength="${tam[CAMPO.obsEntrega]}"` : ''} placeholder="Texto livre: horário de recebimento, contato, acesso…" ${dis('obsEntrega')} ${tit('obsEntrega')}>${esc(p.obsEntrega || '')}</textarea></div>
             </fieldset>
             ${comCustos ? `<div id="lg-custos">${this.custosHtml(r)}</div>` : ''}
@@ -1724,6 +1817,17 @@ export class Painel {
               ${combo('motivoRetorno', 'Motivo do retorno', this.op('motivoRetorno'), p.motivoRetorno || '')}
               <div class="campo"><label for="f-pedidoReenvio">Pedido do reenvio</label><input id="f-pedidoReenvio" type="text" data-f="pedidoReenvio" value="${esc(p.pedidoReenvio || '')}" maxlength="6" placeholder="Nº do novo pedido" ${dis('pedidoReenvio')} ${tit('pedidoReenvio')}></div>
               <div class="campo inteiro"><label for="f-obsRetorno">Observação do retorno</label><textarea id="f-obsRetorno" data-f="obsRetorno" rows="3" ${tam[CAMPO.obsRetorno] ? `maxlength="${tam[CAMPO.obsRetorno]}"` : ''} placeholder="Texto livre: o que voltou, estado da mercadoria, combinado com o cliente…" ${dis('obsRetorno')} ${tit('obsRetorno')}>${esc(p.obsRetorno || '')}</textarea></div>
+            </fieldset>
+            <fieldset class="grupo-f grupo-fin"><legend>Finalizar sem entrega</legend>
+              <p class="nota inteiro">Para o pedido que não vai ter data de entrega: extravio, mercadoria enviada em outro pedido ou outro motivo. Marcado, o pedido sai dos quadros em aberto e vai para "Retornados e finalizados".${zlhOk ? '' : ' <b>Indisponível: falta o campo ZLH_OBS na tabela de histórico (ZLH) deste ambiente.</b>'}</p>
+              <div class="campo inteiro"><label class="check-fin"><input type="checkbox" id="f-finalizado" data-f="finalizado" value="S" ${finS ? 'checked' : ''} ${dis('finalizado')} ${tit('finalizado')}> Pedido finalizado sem data de entrega</label></div>
+              ${combo('motivoFinal', 'Motivo', this.op('motivoFinal'), p.motivoFinal || '')}
+              ${data('dataFinal', 'Data (no extravio, a data do extravio)', p.dataFinal || '')}
+              <div class="campo"><label for="f-pedidoFinal">Enviado no pedido</label><input id="f-pedidoFinal" type="text" data-f="pedidoFinal" value="${esc(p.pedidoFinal || '')}" maxlength="6" placeholder="Nº do pedido que levou a mercadoria" ${dis('pedidoFinal')} ${tit('pedidoFinal')}></div>
+              ${combo('reembolso', 'Reembolso do extravio', this.op('reembolso'), p.reembolso || '')}
+              ${num('valorReembolso', 'Valor do reembolso (R$)', p.valorReembolso || 0)}
+              ${data('dataReembolso', 'Data do reembolso', p.dataReembolso || '')}
+              <div class="campo inteiro"><label for="f-obsFinal">Observação</label><textarea id="f-obsFinal" data-f="obsFinal" rows="2" ${tam[CAMPO.obsFinal] ? `maxlength="${tam[CAMPO.obsFinal]}"` : ''} placeholder="Ex.: protocolo da transportadora, combinado com o cliente…" ${dis('obsFinal')} ${tit('obsFinal')}>${esc(p.obsFinal || '')}</textarea></div>
             </fieldset>
             <ul class="avisos-f" id="lg-avisos" aria-live="polite"></ul>
           </form>
@@ -1772,6 +1876,7 @@ export class Painel {
       ['ent', 'Entregues', (r) => r.et === 'ent'],
       ['atr', 'Atrasados (em trânsito e entregues com atraso)', (r) => r.prazo === 'atrasado'],
       ['ret', 'Retornados', (r) => r.et === 'ret'],
+      ['fin', 'Finalizados sem entrega (extravio, outro pedido…)', (r) => r.et === 'fin'],
     ];
     if (this.temCustos) lista.push(['div', 'Com custo de frete em divergência', (r) => r.nDiv > 0]);
     return lista;
@@ -1873,6 +1978,14 @@ export class Painel {
         ['Motivo do retorno', 'txt', (r) => this.txtOp('motivoRetorno', r.p.motivoRetorno || '')],
         ['Pedido do reenvio', 'txt', (r) => r.p.pedidoReenvio || ''],
         ['Observação do retorno', 'txt', (r) => r.p.obsRetorno || ''],
+        ['Finalizado sem entrega', 'txt', (r) => (r.p.finalizado === 'S' ? this.txtOp('motivoFinal', r.p.motivoFinal || '') || 'Sim' : '')],
+        ['Data da finalização', 'data', (r) => (r.p.finalizado === 'S' ? r.p.dataFinal || '' : '')],
+        ['Enviado no pedido', 'txt', (r) => (r.p.finalizado === 'S' ? r.p.pedidoFinal || '' : '')],
+        ['Reembolso do extravio', 'txt', (r) => (r.p.finalizado === 'S' && r.p.motivoFinal === 'E' ? this.txtOp('reembolso', r.p.reembolso || '') || 'Pendente' : '')],
+        ['Valor do reembolso', 'num', (r) => (r.p.finalizado === 'S' && r.p.valorReembolso ? r.p.valorReembolso : '')],
+        ['Data do reembolso', 'data', (r) => (r.p.finalizado === 'S' ? r.p.dataReembolso || '' : '')],
+        ['Observação da finalização', 'txt', (r) => (r.p.finalizado === 'S' ? r.p.obsFinal || '' : '')],
+        ['Indicador: o que aconteceu', 'txt', (r) => r.p.obsIndicador || ''],
         ['Volume', 'num', (r) => r.p.volume || ''],
         ['Espécie', 'txt', (r) => r.p.especie || ''],
         ['Peso líquido', 'num', (r) => r.p.pesoLiquido || ''],
@@ -2195,6 +2308,10 @@ export class Painel {
         if (el.checked) out[k] = el.value;
         return;
       }
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        out[k] = el.checked ? 'S' : '';
+        return;
+      }
       if (k === 'transportadora') {
         const v = el.value.trim();
         out[k] = v.includes(' - ') ? v.split(' - ')[0].trim() : v.toUpperCase();
@@ -2204,7 +2321,7 @@ export class Painel {
         out[k] = numBR(el.value);
         return;
       }
-      if (k === 'pedidoReenvio') {
+      if (k === 'pedidoReenvio' || k === 'pedidoFinal') {
         out[k] = numPedido(el.value);
         return;
       }
@@ -2253,6 +2370,23 @@ export class Painel {
         else delete out[k];
       });
     }
+    // Finalizacao sem entrega (24/11/2026): desmarcada limpa todos os dados dela;
+    // reembolso so no extravio; data do reembolso so com Reembolsado
+    const limpar = (ks: (keyof PedidoEdicao)[]) =>
+      ks.forEach((k) => {
+        if (this.faltando.has(CAMPO[k])) return;
+        const a = atual[k];
+        if (a && a !== 0) out[k] = NUMEROS.includes(k) ? 0 : '';
+        else delete out[k];
+      });
+    // (so quando o formulario traz a caixa: a importacao nao mexe nisso)
+    if ('finalizado' in f) {
+      if (f['finalizado'] !== 'S') limpar(FINAL);
+      else if (f['motivoFinal'] !== 'E') limpar(REEMBOLSO);
+      else if (f['reembolso'] !== 'S') limpar(['dataReembolso']);
+    }
+    // descricao so com o indicador "Outros"
+    if ('indicador' in f && !this.indOutros(String(f['indicador'] || ''))) limpar(['obsIndicador']);
     // Pedido com NF: os comerciais ficam como estao (o campo esta desligado)
     if ((p.notas || []).length) COMERCIAIS.forEach((k) => delete out[k]);
     return out as PedidoEdicao;
@@ -2285,6 +2419,15 @@ export class Painel {
       pesoBruto: p.pesoBruto || 0,
       obsEntrega: (p.obsEntrega || '').replace(/\r\n?/g, '\n').trim(),
       obsRetorno: (p.obsRetorno || '').replace(/\r\n?/g, '\n').trim(),
+      finalizado: p.finalizado === 'S' ? 'S' : '',
+      motivoFinal: p.motivoFinal || '',
+      dataFinal: p.dataFinal || '',
+      pedidoFinal: p.pedidoFinal || '',
+      reembolso: p.reembolso || '',
+      valorReembolso: p.valorReembolso || 0,
+      dataReembolso: p.dataReembolso || '',
+      obsFinal: (p.obsFinal || '').replace(/\r\n?/g, '\n').trim(),
+      obsIndicador: (p.obsIndicador || '').replace(/\r\n?/g, '\n').trim(),
     };
   }
 
@@ -2301,6 +2444,22 @@ export class Painel {
       const h = f.querySelector<HTMLButtonElement>(`[data-hoje="${k}"]`);
       if (h) h.disabled = !sim || this.faltando.has(CAMPO[k]);
     });
+    // Finalizar sem entrega: campos so com a caixa marcada; reembolso so no
+    // extravio; data do reembolso so com Reembolsado (24/11/2026)
+    const fin = v.finalizado === 'S';
+    const liga = (k: keyof PedidoEdicao, on: boolean) => {
+      const off = !on || this.faltando.has(CAMPO[k]);
+      const el = f.querySelector<HTMLInputElement>(`[data-f="${k}"]`);
+      if (el) el.disabled = off;
+      const h = f.querySelector<HTMLButtonElement>(`[data-hoje="${k}"]`);
+      if (h) h.disabled = off;
+    };
+    ['motivoFinal', 'dataFinal', 'pedidoFinal', 'obsFinal'].forEach((k) => liga(k as keyof PedidoEdicao, fin));
+    liga('reembolso', fin && v.motivoFinal === 'E');
+    liga('valorReembolso', fin && v.motivoFinal === 'E');
+    liga('dataReembolso', fin && v.motivoFinal === 'E' && v.reembolso === 'S');
+    const obsInd = f.querySelector<HTMLElement>('#lg-obsind');
+    if (obsInd) obsInd.hidden = !this.indOutros(v.indicador);
     const { erros, avisos } = this.conferir(r.p, v);
     const ul = this.el.camada.querySelector('#lg-avisos') as HTMLElement;
     ul.innerHTML = [...erros.map((t) => `<li class="erro">${esc(t)}</li>`), ...avisos.map((t) => `<li>${esc(t)}</li>`)].join('');
@@ -2335,6 +2494,26 @@ export class Painel {
     if (!ret && RETORNO.some((k) => v[k])) erros.push('Motivo, pedido do reenvio e observação do retorno só com a data do retorno.');
     if (v.pedidoReenvio && v.pedidoReenvio === p.pedido) erros.push('O pedido do reenvio tem que ser outro pedido.');
     if (ret && !v.pedidoReenvio) avisos.push('Sem o pedido do reenvio: fica em Retornados como "aguardando reenvio".');
+    // Finalizado sem entrega (mesmas regras da API 2026-11-24b)
+    if (v.finalizado === 'S') {
+      const mot = v.motivoFinal || '';
+      const dfim = v.dataFinal || '';
+      const entF = v.reentrega === 'S' ? nova : ent;
+      if (!mot) erros.push('Finalizado sem entrega: escolha o motivo.');
+      if (!dfim) erros.push(mot === 'E' ? 'Informe a data do extravio.' : 'Informe a data da finalização.');
+      if (dfim && dfim < p.emissao) erros.push(`A data da finalização (${fmt(dfim)}) é anterior à emissão do pedido (${fmt(p.emissao)}).`);
+      if (ret) erros.push('Pedido com data do retorno já está encerrado em Retornados: apague o retorno para finalizar sem entrega.');
+      if (entF) erros.push('Pedido com data de entrega já está encerrado: apague a data de entrega para finalizar sem entrega.');
+      if (mot === 'E' && !env) erros.push('Extravio só para pedido enviado: informe a data de envio.');
+      if (mot === 'E' && env && dfim && dfim < env) erros.push(`O extravio (${fmt(dfim)}) é anterior ao envio (${fmt(env)}).`);
+      if (mot === 'P' && !v.pedidoFinal) erros.push('Informe o pedido em que a mercadoria foi enviada.');
+      if (v.pedidoFinal && v.pedidoFinal === p.pedido) erros.push('O pedido em que a mercadoria foi tem que ser outro pedido.');
+      if (mot === 'O' && !(v.obsFinal || '').trim()) erros.push('Outro motivo: descreva na observação o que aconteceu.');
+      if (mot === 'E' && v.reembolso === 'S' && v.dataReembolso && dfim && v.dataReembolso < dfim) erros.push(`O reembolso (${fmt(v.dataReembolso)}) é anterior ao extravio (${fmt(dfim)}).`);
+      if (mot === 'E' && v.reembolso !== 'S' && v.reembolso !== 'N') avisos.push('Extravio com reembolso pendente: o pedido aparece no cartão "Reembolsos pendentes" até o reembolso ser resolvido.');
+      if (mot === 'E' && v.reembolso === 'S' && !v.valorReembolso) avisos.push('Reembolsado: informe o valor do reembolso.');
+    }
+    if (this.indOutros(v.indicador) && !(v.obsIndicador || '').trim() && !this.faltando.has(CAMPO.obsIndicador)) erros.push('Indicador "Outros": descreva o que aconteceu.');
     const tr = v.transportadora || '';
     if (tr && !(p.notas || []).length && !(this.resp?.transportadoras || []).some(([c]) => c === tr)) erros.push(`Transportadora "${tr}" não encontrada no cadastro (escolha na lista).`);
     if (env && !(p.notas || []).length) avisos.push('Pedido sem nota fiscal com data de envio preenchida.');
@@ -3066,7 +3245,13 @@ export class Painel {
       this.atualizarForm();
     });
     this.el.camada.addEventListener('change', (ev) => {
-      if (!(ev.target as HTMLElement).closest('#lg-form')) return;
+      const t = ev.target as HTMLElement;
+      if (!t.closest('#lg-form')) return;
+      // marcou "finalizado sem entrega": a data comeca em hoje
+      if (t instanceof HTMLInputElement && t.dataset['f'] === 'finalizado' && t.checked) {
+        const d = this.el.camada.querySelector<HTMLInputElement>('[data-f="dataFinal"]');
+        if (d && !d.value) d.value = iso(this.hoje);
+      }
       this.atualizarForm();
     });
     this.el.camada.addEventListener('submit', (ev) => ev.preventDefault());
