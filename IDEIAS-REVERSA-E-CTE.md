@@ -28,18 +28,22 @@ O usuário quer adaptar isso ao que já existe.
   2. **Se o cliente emite a NF de devolução:** a empresa dá entrada nessa NF, **vinculada à NF de saída**.
   3. **Se o cliente não emite:** a própria empresa faz a entrada, **amarrando a saída e a entrada**.
 
-**Como entendi (a confirmar com o usuário):**
-- Para as locações do ERP antigo, a NF de saída é emitida no Protheus **no momento do retorno**, só para regularizar: dar uma NF de origem para a entrada apontar.
-- Para as locações feitas no Protheus em 2026, a saída é a própria remessa original.
+**Passo a passo do lançamento (usuário, 24/11/2026; exemplo em que o cliente não emite NF):**
+
+| Passo | Rotina | O que é | Dados |
+|---|---|---|---|
+| 1. Registrar a remessa do sistema antigo | **MATA920** (NF de saída manual, sem pedido de venda) | A NF de saída emitida pela ATM no ERP antigo | tipo N; formulário próprio = sim; número, série e **data da NF antiga**; cliente; espécie SPED; item, quantidade, **TES 906 / CFOP 6908** (remessa de bem em comodato ou locação) |
+| 2. Entrada de retorno feita pela empresa | **MATA910** (NF de entrada manual) | NF de entrada **emitida pela empresa**, que também **acompanha o transporte** | tipo **Devolução**; formulário próprio = sim; número automático; data de emissão = hoje; mesmo cliente e espécie; mesmo item; **TES 456 / CFOP 2909** (retorno de bem em comodato ou locação); **Docto. Orig. (`D1_NFORI`) = NF do passo 1** |
 
 **O que isso muda no desenho:**
-- **Fechamento automático da reversa:** viável. Nos dois casos, a NF de entrada aponta a NF de saída. É o caminho `D1_NFORI`/`D1_SERIORI` → SD2 → `D2_PEDIDO` → pedido. A NF do cliente e a entrada própria (`F1_FORMUL = 'S'`) seguem esse mesmo caminho.
-- **Locações do ERP antigo não estão no Protheus antes do retorno:**
-  - a lista "equipamentos no cliente" só enxerga as remessas de 2026;
-  - a reversa de uma locação antiga começa pelo e-mail **sem pedido no Protheus**, com cliente e equipamento ou série digitados;
-  - ela é amarrada quando a NF de saída de regularização existir.
-- **A tela de saídas pode estar mostrando essas NFs de regularização como "Faturados parados".** Elas são saídas com NF e sem envio, mas nada sai fisicamente. É preciso descobrir como identificá-las (tipo de pedido, TES ou CFOP) para tirá-las das saídas e levá-las para a reversa.
+- **A hipótese da manhã de 24/11 estava errada.** A NF do passo 1 vem da MATA920, que **não tem pedido de venda**. Então ela não aparece na tela de saídas, que parte da SC5/SC6, e não está nos "Faturados parados". A conferir no diagnóstico.
+- **Regra para achar a reversa:** CFOP **x908** (5908/6908) = remessa de comodato ou locação; **x909** (1909/2909) = retorno. A entrada x909 aponta a remessa x908 pelo `D1_NFORI`/`D1_SERIORI`. Vale para as remessas antigas (MATA920, sem pedido) e para as de 2026 (pedido de venda).
+- **A reversa fica ligada à NF de remessa** (documento, série e cliente), não ao `C5_NUM`, porque as remessas antigas não têm pedido. O frete cobrado (ida + volta) só existe nas remessas de 2026, que têm pedido.
+- **A entrada própria é emitida na coleta, não na chegada:** ela viaja com a mercadoria. Então ela marca **"coletado / em trânsito"**. O **recebimento físico** é confirmado pela logística na tela, com a data de chegada.
+- **CTE da reversa:** se a entrada própria é NF-e (espécie SPED), o CTE da transportadora cita a chave dela. O vínculo pode ser automático, se o XML do CTE ficar na base.
+- **Equipamentos no cliente:** remessas x908 sem retorno x909. Só as de 2026 aparecem antes do retorno, porque as antigas só são lançadas na MATA920 na hora em que voltam.
 
+## Análise e desenho proposto
 
 **Reversa ligada ao pedido de saída original**
 - O frete cobrado do cliente (ida + volta) está no pedido de remessa. Então a reversa fica ligada a esse pedido (tipo LOC/COM no `C5_ZTPPEDI`).
@@ -68,9 +72,9 @@ O usuário quer adaptar isso ao que já existe.
 ## Ordem sugerida
 
 1. **Diagnóstico só de leitura.** Exige um endpoint de consulta para compilar, no molde do diagnóstico do HISTEVT. Ele levanta (com as respostas de 24/11):
-   - NFs de entrada com `D1_NFORI` apontando uma saída: por mês, NF do cliente × entrada própria (`F1_FORMUL`), `F1_TIPO`, TES, CFOP e armazém (`D1_LOCAL`);
-   - a saída apontada: tipo de pedido (`C5_ZTPPEDI` LOC/COM), TES, CFOP, data; e se foi emitida perto da entrada (regularização do ERP antigo) ou meses antes (remessa de 2026);
-   - quantas dessas saídas estão hoje na tela de saídas como faturado sem envio;
+   - entradas de retorno (CFOP 1909/2909, TES 456) por mês: NF do cliente × entrada própria (`F1_FORMUL`), `F1_TIPO`, armazém (`D1_LOCAL`), se o `D1_NFORI` está preenchido;
+   - a remessa apontada (CFOP 5908/6908): com ou sem pedido (`D2_PEDIDO`: MATA920 = sem), TES, data da NF e dias até o retorno;
+   - remessas x908 de 2026 sem retorno (futura lista de equipamentos no cliente);
    - CTEs de entrada por mês, por transportadora, com espécie e TES usadas;
    - quantos desses CTEs batem com a ZLC;
    - se o XML do CTE fica guardado;
@@ -87,6 +91,8 @@ O usuário quer adaptar isso ao que já existe.
 - O frete de retorno vem somado no `C5_FRETE`/`C5_ZFRETE` da remessa ou é cobrado à parte?
 - Pode haver retorno parcial (só parte dos equipamentos)?
 - ~~Quem lança a NF de entrada do retorno, e ela é lançada informando a NF de saída original?~~ Respondido em 24/11: sempre vinculada à NF de saída (do cliente ou entrada própria).
-- **Confirmar:** nas locações do ERP antigo, a NF de saída é emitida só no retorno, para regularizar? Com qual tipo de pedido, TES ou CFOP?
-- Exemplos reais para o diagnóstico: o número de um retorno com NF do cliente e de um com entrada própria.
+- ~~Confirmar a saída das locações antigas~~ Respondido em 24/11: MATA920, TES 906 / CFOP 6908, com os dados da NF antiga.
+- Quando o cliente emite a NF de devolução: a entrada é pela MATA910 ou pelo documento de entrada (MATA103)? Com a TES 456?
+- Remessas feitas no Protheus em 2026: pedido de venda com qual TES (também a 906)?
+- Na chegada do equipamento existe algum registro no Protheus (conferência, transferência de armazém), ou só a logística sabe?
 - Depois que o equipamento chega, existe conferência técnica (armazém de conserto) que a logística acompanha, ou "recebido" encerra?
