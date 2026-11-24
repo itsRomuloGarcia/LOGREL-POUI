@@ -1,6 +1,6 @@
 # Ideia em estudo: logística reversa e CTEs de entrada
 
-**Situação (22/11/2026): só ideia. Nada foi implementado nem alterado.** O usuário vai estudar como o faturamento lança as NFs e como cruzar essas informações no Protheus. Com as respostas dele, a conversa continua deste ponto.
+**Situação (24/11/2026): só ideia. Nada foi implementado nem alterado.** Em 24/11 o usuário explicou como o retorno de locação é lançado (seção abaixo). O usuário vai estudar como o faturamento lança as NFs e como cruzar essas informações no Protheus. Com as respostas dele, a conversa continua deste ponto.
 
 ## Pedido do usuário
 
@@ -20,7 +20,26 @@ O usuário quer adaptar isso ao que já existe.
 4. **Contrato:** não existe contrato no Protheus para locação ou comodato.
 5. **Onde fica a reversa:** numa aba nova, separada, para não misturar com as saídas.
 
-## Análise e desenho proposto
+## Como o retorno de locação é lançado (usuário, 24/11/2026)
+
+- O Protheus começou a operar no **início de 2026**. As locações anteriores foram feitas no **ERP antigo**.
+- **Quando o produto de locação volta:**
+  1. É feita a **NF de saída** no Protheus.
+  2. **Se o cliente emite a NF de devolução:** a empresa dá entrada nessa NF, **vinculada à NF de saída**.
+  3. **Se o cliente não emite:** a própria empresa faz a entrada, **amarrando a saída e a entrada**.
+
+**Como entendi (a confirmar com o usuário):**
+- Para as locações do ERP antigo, a NF de saída é emitida no Protheus **no momento do retorno**, só para regularizar: dar uma NF de origem para a entrada apontar.
+- Para as locações feitas no Protheus em 2026, a saída é a própria remessa original.
+
+**O que isso muda no desenho:**
+- **Fechamento automático da reversa:** viável. Nos dois casos, a NF de entrada aponta a NF de saída. É o caminho `D1_NFORI`/`D1_SERIORI` → SD2 → `D2_PEDIDO` → pedido. A NF do cliente e a entrada própria (`F1_FORMUL = 'S'`) seguem esse mesmo caminho.
+- **Locações do ERP antigo não estão no Protheus antes do retorno:**
+  - a lista "equipamentos no cliente" só enxerga as remessas de 2026;
+  - a reversa de uma locação antiga começa pelo e-mail **sem pedido no Protheus**, com cliente e equipamento ou série digitados;
+  - ela é amarrada quando a NF de saída de regularização existir.
+- **A tela de saídas pode estar mostrando essas NFs de regularização como "Faturados parados".** Elas são saídas com NF e sem envio, mas nada sai fisicamente. É preciso descobrir como identificá-las (tipo de pedido, TES ou CFOP) para tirá-las das saídas e levá-las para a reversa.
+
 
 **Reversa ligada ao pedido de saída original**
 - O frete cobrado do cliente (ida + volta) está no pedido de remessa. Então a reversa fica ligada a esse pedido (tipo LOC/COM no `C5_ZTPPEDI`).
@@ -48,7 +67,10 @@ O usuário quer adaptar isso ao que já existe.
 
 ## Ordem sugerida
 
-1. **Diagnóstico só de leitura.** Exige um endpoint de consulta para compilar, no molde do diagnóstico do HISTEVT. Ele levanta:
+1. **Diagnóstico só de leitura.** Exige um endpoint de consulta para compilar, no molde do diagnóstico do HISTEVT. Ele levanta (com as respostas de 24/11):
+   - NFs de entrada com `D1_NFORI` apontando uma saída: por mês, NF do cliente × entrada própria (`F1_FORMUL`), `F1_TIPO`, TES, CFOP e armazém (`D1_LOCAL`);
+   - a saída apontada: tipo de pedido (`C5_ZTPPEDI` LOC/COM), TES, CFOP, data; e se foi emitida perto da entrada (regularização do ERP antigo) ou meses antes (remessa de 2026);
+   - quantas dessas saídas estão hoje na tela de saídas como faturado sem envio;
    - CTEs de entrada por mês, por transportadora, com espécie e TES usadas;
    - quantos desses CTEs batem com a ZLC;
    - se o XML do CTE fica guardado;
@@ -64,5 +86,7 @@ O usuário quer adaptar isso ao que já existe.
 - Como a equipe de faturamento lança a NF, tanto a de entrada do retorno quanto o CTE, e como cruzar essas informações no Protheus.
 - O frete de retorno vem somado no `C5_FRETE`/`C5_ZFRETE` da remessa ou é cobrado à parte?
 - Pode haver retorno parcial (só parte dos equipamentos)?
-- Quem lança a NF de entrada do retorno, e ela é lançada informando a NF de saída original?
+- ~~Quem lança a NF de entrada do retorno, e ela é lançada informando a NF de saída original?~~ Respondido em 24/11: sempre vinculada à NF de saída (do cliente ou entrada própria).
+- **Confirmar:** nas locações do ERP antigo, a NF de saída é emitida só no retorno, para regularizar? Com qual tipo de pedido, TES ou CFOP?
+- Exemplos reais para o diagnóstico: o número de um retorno com NF do cliente e de um com entrada própria.
 - Depois que o equipamento chega, existe conferência técnica (armazém de conserto) que a logística acompanha, ou "recebido" encerra?
