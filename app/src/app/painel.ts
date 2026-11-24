@@ -112,7 +112,8 @@ const CAMPO: Record<keyof PedidoEdicao, string> = {
   pesoLiquido: 'C5_PESOL',
   pesoBruto: 'C5_PBRUTO',
   obsEntrega: 'C5_ZOBS',
-  obsRetorno: 'C5_ZOBSRET',
+  /** observacao do retorno: linha da ZLH (ZLH_OBS), nao campo da SC5 (23/11/2026) */
+  obsRetorno: 'ZLH_OBS',
 };
 const NUMEROS: (keyof PedidoEdicao)[] = ['valorCte', 'valorCteReentrega', 'frete', 'volume', 'freteNaoDestacado', 'pesoLiquido', 'pesoBruto'];
 const REENTREGA: (keyof PedidoEdicao)[] = ['cteReentrega', 'valorCteReentrega', 'dataNovaEntrega'];
@@ -454,8 +455,8 @@ export class Painel {
     if (!r.versao || r.versao < '2026-11-15a') PARA_NFE.forEach((k) => this.faltando.add(CAMPO[k]));
     // API anterior a 2026-11-15b: sem C5_ZOBS e a saida programada ainda copia para o envio
     if (!r.versao || r.versao < '2026-11-15b') this.faltando.add(CAMPO.obsEntrega);
-    // API anterior a 2026-11-23a: sem a observacao do retorno
-    if (!r.versao || r.versao < '2026-11-23a') this.faltando.add(CAMPO.obsRetorno);
+    // API anterior a 2026-11-23b: sem a observacao do retorno (ZLH_OBS)
+    if (!r.versao || r.versao < '2026-11-23b') this.faltando.add(CAMPO.obsRetorno);
     // Com a tabela de custos, o CTE da SC5 nao e mais usado: nao avisa se faltar
     if (r.temCustos) ['C5_ZCTE', 'C5_ZVLRCTE', 'C5_ZCTEREE', 'C5_ZVCTERE'].forEach((c) => this.faltando.delete(c));
     this.regs = (r.pedidos || []).map((p) => this.montar(p));

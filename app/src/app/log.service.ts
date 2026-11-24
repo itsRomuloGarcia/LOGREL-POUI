@@ -130,7 +130,7 @@ export interface Pedido {
   pedidoReenvio?: string;
   /** C5_ZOBS: observacoes da entrega (texto livre); API >= 2026-11-15b */
   obsEntrega?: string;
-  /** C5_ZOBSRET: observacao do retorno a empresa (campo novo); API >= 2026-11-23a */
+  /** Observacao do retorno a empresa: ultima linha OBSRET da ZLH (ZLH_OBS); API >= 2026-11-23b */
   obsRetorno?: string;
   /** C5_MENNOTA: mensagem para a nota (so leitura); API >= 2026-11-23a */
   mensagemNota?: string;
@@ -195,7 +195,7 @@ export interface PedidoEdicao {
   pesoLiquido?: number;
   pesoBruto?: number;
   obsEntrega?: string;
-  /** C5_ZOBSRET: so com a data do retorno (API >= 2026-11-23a) */
+  /** Observacao do retorno (grava uma linha na ZLH): so com a data do retorno (API >= 2026-11-23b) */
   obsRetorno?: string;
 }
 

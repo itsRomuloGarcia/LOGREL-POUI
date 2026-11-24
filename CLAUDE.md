@@ -233,24 +233,27 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - Com filtro ligado, os Entregues antigos aparecem.
     - Na Lista, no XLSX e na planilha Google: coluna "Informação faltando".
   - **Cards que filtram (`button.kpi`, `e.fGlobal`):** "Com informação faltando" e **"Saíram hoje"** (`dataEnvio` = hoje, pedido do usuário). Clicar liga; clicar de novo, ou na faixa `.filtro-ativo`, desliga.
-  - **Observação do retorno:** o usuário escolheu **campo novo**, `C5_ZOBSRET`. Ele cria o campo no SX3 da homologação (sugestão: C 250, pasta 3, título "Obs. Retorno") e leva para a produção pelo `LOGRELUPD`, que agora tem 18 campos em `Esperados()`.
-    - API: grupo RET, só com data do retorno, e mensagem `SEM_RETORNO` atualizada. Também entra no histórico (`TituloCampo`) e em `Tamanhos`.
-    - Tela: textarea no bloco Retorno, `RETORNO`/`OBS` e limpeza junto com a data do retorno.
-    - Sem o campo, ou com API anterior a `2026-11-23a`, o campo fica desligado.
+  - **Observação do retorno, na ZLH e não na SC5** (API `2026-11-23b`). A 1ª versão (`2026-11-23a`, commit `996348d`) usava um campo novo `C5_ZOBSRET`. O usuário não quis "poluir" a SC5, e ninguém tinha criado esse campo. Ele então criou o **`ZLH_OBS`** na ZLH pelo Configurador, sem compatibilizador; tipo e tamanho não foram conferidos daqui. O `LOGRELUPD` voltou a ter 17 campos.
+    - **Gravação:** a chave `obsRetorno` do PUT fica fora do `MapaCampos`. Se for diferente da atual (`ObsRetAtual`), `GravaObsRet` grava uma linha `ZLH_CAMPO = OBSRET` com:
+      - ação I/A/E (E = texto vazio);
+      - texto inteiro no `ZLH_OBS`;
+      - `UmaLinha` em VALANT/VALNOV, para o Histórico mostrar.
+    - Só com data do retorno (`lRetCampos`, mensagem `SEM_RETORNO`). Sem ZLH/`ZLH_OBS` (`TemObsRet` = `TemTab("ZLH")` + `ColunasDe("ZLH")`), a gravação devolve `CAMPO_INEXISTENTE` com "ZLH_OBS". Um erro na linha vira `avisoHistorico`.
+    - **Leitura:** `ObsRetornos`, no fim do `ConsultaPedidos`, lê todas as linhas OBSRET da filial (são poucas) e fica com a última de cada pedido. Memo real é lido por BLOB/CLOB (`ObsZlhSql`). `tamanhos.ZLH_OBS` só vai se o campo for caracter.
+    - **Tela:** `CAMPO.obsRetorno = 'ZLH_OBS'` (chave de `faltando`), textarea no bloco Retorno, `RETORNO`/`OBS`, limpa junto com a data do retorno. Com API anterior a `2026-11-23b`, o campo fica desligado.
   - **Endereço e C5_MENNOTA na gaveta:** C5_MENNOTA só para leitura (escolha do usuário).
     - O endereço vem do mesmo cadastro da cidade/UF: `EndCol` usa SAE/SFE, com `A1_END`/`A1_COMPLEM`/`A1_BAIRRO`/`A1_CEP` ou os `A2_*`.
     - Coluna inexistente vira `' '`, conferida em `ColunasDe("SA1"/"SA2")`.
     - `A1_ENDENT` (endereço de entrega do cadastro) não é usado.
-    - `ObsSql` ficou genérico (C5_ZOBS, C5_ZOBSRET, C5_MENNOTA), lendo memo real por BLOB/CLOB.
+    - `ObsSql` ficou genérico (C5_ZOBS e C5_MENNOTA), lendo memo real por BLOB/CLOB.
   - **Período saiu do topo:** `consultar()` usa `e.de` (01/01 do ano anterior) até hoje.
-  - **Testado** com a cópia da API falsa (campos novos, pedidos sem transportadora e peso, 2 envios hoje), `ng serve` e Chrome headless: 17 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi testada pelo harness do Node: 18 pendências e 2 "saíram hoje", iguais à tela. Pacotes regerados em 23/11, 20:54. **Não testado no Protheus.**
+  - **Testado** com a cópia da API falsa (campos novos, pedidos sem transportadora e peso, 2 envios hoje), `ng serve` e Chrome headless: 17 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi testada pelo harness do Node: 18 pendências e 2 "saíram hoje", iguais à tela. Na `2026-11-23b`, a API falsa ganhou um PUT. A gravação mandou só `{"obsRetorno": ...}`, e o texto voltou na gaveta: 18 verificações ok. Pacotes regerados em 23/11 com a `23b`. **Não testado no Protheus.**
 
 ## Pendências
 - **23/11/2026:**
-  1. O usuário cria o `C5_ZOBSRET` no SX3 da homologação.
-  2. Compilar o `RESTLOGREL.tlpp` `2026-11-23a`, o `logrel.app` de 23/11 e o `LOGRELUPD.prw`.
-  3. Conferir o endereço e o C5_MENNOTA na gaveta.
-  4. Na produção: exportar de novo na homologação e importar (cria só o `C5_ZOBSRET`); depois compilar os mesmos fontes.
+  1. Homologação (o `ZLH_OBS` já foi criado pelo usuário): compilar o `RESTLOGREL.tlpp` `2026-11-23b` e o `logrel.app` de 23/11. O `LOGRELUPD.prw` não mudou em relação ao que está no RPO.
+  2. Conferir: gravar e alterar uma observação de retorno (aparece no Histórico); endereço e C5_MENNOTA na gaveta.
+  3. Produção: criar o `ZLH_OBS` igual ao da homologação e depois compilar os mesmos fontes.
   5. Colar o `planilha/Codigo.gs` novo no Apps Script.
 - **22/11/2026, ideia em estudo (nada implementado): logística reversa e CTEs de entrada.** Desenho, respostas do usuário e perguntas em aberto estão em `IDEIAS-REVERSA-E-CTE.md`. O usuário vai estudar como o faturamento lança as NFs e como cruzar isso no Protheus. **Não implementar antes dessas respostas.**
 - **22/11/2026:** criar a planilha Google, colar o `planilha/Codigo.gs`, cadastrar as propriedades (REST da produção 10407, usuário de leitura) e ligar a atualização automática. Conferir as contagens do Resumo com a tela.

@@ -52,8 +52,11 @@
 //     (A1_END/A1_COMPLEM/A1_BAIRRO/A1_CEP; A2_* na devolucao/beneficiamento),
 //     do mesmo cadastro da cidade/UF. Coluna que nao existe no SA1/SA2 vai vazia.
 //   - "mensagemNota" = C5_MENNOTA (mensagem para a nota), so leitura.
-//   - "obsRetorno" = C5_ZOBSRET (observacao do retorno a empresa), campo novo
-//     e opcional: sem ele vai vazio e entra em camposFaltando.
+//   - "obsRetorno" = observacao do retorno a empresa (2026-11-23b): NAO fica na
+//     SC5 (pedido do usuario, para nao criar mais campo nela). Cada gravacao e
+//     uma linha da ZLH com ZLH_CAMPO = "OBSRET" e o texto inteiro no ZLH_OBS
+//     (campo criado pelo usuario na ZLH); vale a linha mais recente do pedido
+//     (ObsRetornos). Sem a ZLH ou o ZLH_OBS: vazio e "ZLH_OBS" em camposFaltando.
 //   - Numeros de serie (2026-11-16a, pedido do usuario, igual ao RX Pedidos):
 //     cada item ganha "numerosSerie" = [[serie, nf], ...] da Z01 (Z01_PEDIDO,
 //     Z01_ITEM, Z01_SERIE, Z01_NFEDO), com e sem NF. Sem a tabela Z01 ou as
@@ -72,8 +75,8 @@
 //     memo: a leitura sai pelo tipo da coluna no Oracle (ObsSql) e a gravacao
 //     de memo nao passa pelo limite de tamanho;
 //   - retorno exige envio e retorno >= envio; motivo, pedido do reenvio e
-//     observacao do retorno (C5_ZOBSRET, "obsRetorno", 2026-11-23a) so com
-//     data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
+//     observacao do retorno ("obsRetorno", gravada na ZLH, 2026-11-23b) so
+//     com data do retorno; pedido do reenvio existe na SC5 e e outro pedido;
 //   - transportadora, volume, especie (C5_ESPECI1), peso liquido (C5_PESOL) e
 //     peso bruto (C5_PBRUTO) so enquanto o pedido NAO tem nota: sao dados da
 //     NF-e e tem que estar no pedido antes da emissao (depois ja sairam no
@@ -116,7 +119,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-23a"
+#define LG_VERSAO     "2026-11-23b"
 // Dicionario do Oracle so do schema da conexao (2026-11-18a): homologacao e
 // producao estao no mesmo Oracle; sem o OWNER, as colunas C5_Z* da homologacao
 // "existiam" na producao, a query usava coluna inexistente e a thread caia
@@ -289,6 +292,10 @@ Static Function GravaPedido()
    Local cHA         := ""
    Local cHN         := ""
    Local cAvisoH     := ""
+   Local lObsRet     := .F.
+   Local cObsRet     := ""
+   Local cObsAnt     := ""
+   Local cAvisoO     := ""
 
    oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=UTF-8")
    oRest:setKeyHeaderResponse("Access-Control-Allow-Origin", "*")
@@ -403,7 +410,7 @@ Static Function GravaPedido()
             EndIf
          Else
             xVal := AllTrim(TxtIn(jBody[cChave]))
-            If cCampo == "C5_ZOBS" .or. cCampo == "C5_ZOBSRET"
+            If cCampo == "C5_ZOBS"
                // quebra de linha: CRLF no memo; espaco no campo caracter
                xVal := StrTran(StrTran(xVal, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
                xVal := StrTran(xVal, Chr(10), IIf(TamSX3(cCampo)[3] == "M", Chr(13) + Chr(10), " "))
@@ -434,12 +441,32 @@ Static Function GravaPedido()
          EndIf
       Next nI
 
+      // observacao do retorno: vai para a ZLH (ZLH_OBS), nao para a SC5 (2026-11-23b)
+      If jBody:HasProperty("obsRetorno")
+         If !TemObsRet()
+            aAdd(aFalta, "ZLH_OBS")
+         Else
+            cObsRet := AllTrim(TxtIn(jBody["obsRetorno"]))
+            cObsRet := StrTran(StrTran(cObsRet, Chr(13) + Chr(10), Chr(10)), Chr(13), Chr(10))
+            cObsRet := StrTran(cObsRet, Chr(10), IIf(TamSX3("ZLH_OBS")[3] == "M", Chr(13) + Chr(10), " "))
+            If TamSX3("ZLH_OBS")[3] != "M" .and. Len(cObsRet) > TamSX3("ZLH_OBS")[1]
+               jRet := BuildErro(400, "TEXTO_GRANDE", "obsRetorno com mais de " + cValToChar(TamSX3("ZLH_OBS")[1]) + " caracteres.")
+               lRespondido := .T.
+               Break
+            EndIf
+            lObsRet := .T.
+            If !Empty(cObsRet)
+               lRetCampos := .T.
+            EndIf
+         EndIf
+      EndIf
+
       If Len(aFalta) > 0
-         jRet := BuildErro(400, "CAMPO_INEXISTENTE", "Campos ainda nao criados na SC5: " + ArrToTxt(aFalta) + ".")
+         jRet := BuildErro(400, "CAMPO_INEXISTENTE", "Campos ainda nao criados: " + ArrToTxt(aFalta) + ".")
          lRespondido := .T.
          Break
       EndIf
-      If Len(aGrava) == 0 .and. Len(aCusto) == 0
+      If Len(aGrava) == 0 .and. Len(aCusto) == 0 .and. !lObsRet
          jRet := BuildErro(400, "SEM_CAMPOS", "Nenhum campo para gravar.")
          lRespondido := .T.
          Break
@@ -537,11 +564,19 @@ Static Function GravaPedido()
          cAvisoH := GravaHists(cPedido, aHist, cOrigem)
       EndIf
 
+      cEtapa := "05d-obs-retorno"
+      If lObsRet
+         cObsAnt := ObsRetAtual(cPedido)
+         If !(cObsAnt == cObsRet)
+            cAvisoO := GravaObsRet(cPedido, cObsAnt, cObsRet, cOrigem)
+         EndIf
+      EndIf
+
       cEtapa := "06-resposta"
       aPed := ConsultaPedidos(CToD(""), CToD(""), {cPedido}, @aIgnora, @cEtapa, @cAlAberto)
       If Len(aPed) > 0
-         If !Empty(cAvisoH)
-            aPed[1]["avisoHistorico"] := TxtOut(cAvisoH)
+         If !Empty(cAvisoH) .or. !Empty(cAvisoO)
+            aPed[1]["avisoHistorico"] := TxtOut(AllTrim(cAvisoH + " " + cAvisoO))
          EndIf
          jRet := oRest:setStatusResponse(200, aPed[1]:ToJson())
       Else
@@ -700,7 +735,6 @@ Static Function MapaCampos()
    aAdd(aMapa, {"motivoRetorno",     "C5_ZMOTRET", "B", "RET"})
    aAdd(aMapa, {"pedidoReenvio",     "C5_ZPEDREN", "P", "RET"})
    aAdd(aMapa, {"obsEntrega",        "C5_ZOBS",    "C", "LOG"})
-   aAdd(aMapa, {"obsRetorno",        "C5_ZOBSRET", "C", "RET"})
    aAdd(aMapa, {"transportadora",    "C5_TRANSP",  "T", "COM"})
    aAdd(aMapa, {"volume",            "C5_VOLUME1", "N", "COM"})
    aAdd(aMapa, {"especie",           "C5_ESPECI1", "C", "COM"})
@@ -728,7 +762,7 @@ Static Function TituloCampo(cCampo)
       {"C5_ZMOTRET", "Motivo do retorno"}, ;
       {"C5_ZPEDREN", "Pedido do reenvio"}, ;
       {"C5_ZOBS", "Observacoes da entrega"}, ;
-      {"C5_ZOBSRET", "Observacao do retorno"}, ;
+      {"OBSRET", "Observacao do retorno"}, ;
       {"C5_TRANSP", "Transportadora"}, ;
       {"C5_VOLUME1", "Volume"}, ;
       {"C5_ESPECI1", "Especie"}, ;
@@ -903,7 +937,6 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ZMOTRET", "MOTRET", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZPEDREN", "PEDREN", @aFalta) + ", "
    cQuery += "       " + ObsSql(cExist, @aFalta, "C5_ZOBS") + " AS OBSENT, "
-   cQuery += "       " + ObsSql(cExist, @aFalta, "C5_ZOBSRET") + " AS OBSRET, "
    cQuery += "       " + ObsSql(cExist, @aFalta, "C5_MENNOTA") + " AS MENNOTA, "
    cQuery += "       SC6.C6_ITEM AS ITEM, SC6.C6_PRODUTO AS PRODUTO, SC6.C6_DESCRI AS DESCRI, "
    cQuery += "       SC6.C6_QTDVEN AS QTDVEN, SC6.C6_QTDENT AS QTDENT, SC6.C6_VALOR AS VALOR, "
@@ -1032,7 +1065,6 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["motivoRetorno"]     := AllTrim(cValToChar((cAlias)->MOTRET))
          jPed["pedidoReenvio"]     := AllTrim(cValToChar((cAlias)->PEDREN))
          jPed["obsEntrega"]        := TxtOut(cValToChar((cAlias)->OBSENT))
-         jPed["obsRetorno"]        := TxtOut(cValToChar((cAlias)->OBSRET))
          jPed["mensagemNota"]      := TxtOut(cValToChar((cAlias)->MENNOTA))
          jPed["enderecoEntrega"]   := TxtOut(cValToChar((cAlias)->ENDENT))
          jPed["complementoEntrega"]:= TxtOut(cValToChar((cAlias)->COMPENT))
@@ -1078,7 +1110,128 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
 
    cEtapa := "02d-custos"
    CustosPedidos(aPed)
+
+   cEtapa := "02e-obs-retorno"
+   ObsRetornos(aPed, @aFalta)
 Return aPed
+
+// ZLH existe e tem o ZLH_OBS (criado pelo usuario em 23/11/2026, fora do
+// compatibilizador): conferido no ALL_TAB_COLUMNS, uma vez por chamada
+Static Function TemObsRet()
+Return TemTab("ZLH") .and. ("|ZLH_OBS|" $ ColunasDe("ZLH"))
+
+// Expressao do ZLH_OBS na query, pelo tipo da coluna (memo real = BLOB/CLOB)
+Static Function ObsZlhSql()
+   Local cTipo := ""
+   Local cAl   := GetNextAlias()
+   Local oStmt := FWExecStatement():New("SELECT DATA_TYPE FROM ALL_TAB_COLUMNS WHERE " + LG_OWNER + " AND TABLE_NAME = ? AND COLUMN_NAME = 'ZLH_OBS'")
+   oStmt:SetString(1, AllTrim(RetSqlName("ZLH")))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      cTipo := Upper(AllTrim((cAl)->DATA_TYPE))
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+   If cTipo == "BLOB"
+      Return "NVL(UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(ZLH_OBS, 2000, 1)), ' ')"
+   ElseIf cTipo == "CLOB" .or. cTipo == "NCLOB"
+      Return "NVL(DBMS_LOB.SUBSTR(ZLH_OBS, 2000, 1), ' ')"
+   EndIf
+Return "ZLH_OBS"
+
+// "obsRetorno" de cada pedido = ZLH_OBS da linha OBSRET mais recente (sao
+// poucas linhas: le todas as da filial e fica com a ultima de cada pedido)
+Static Function ObsRetornos(aPed, aFalta)
+   Local jObs   := JsonObject():New()
+   Local cQuery := ""
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   Local nI     := 0
+   If Len(aPed) == 0
+      Return Nil
+   EndIf
+   If !TemObsRet()
+      aAdd(aFalta, "ZLH_OBS")
+      For nI := 1 to Len(aPed)
+         aPed[nI]["obsRetorno"] := ""
+      Next nI
+      Return Nil
+   EndIf
+   cQuery := "SELECT ZLH_PEDIDO, " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + " "
+   cQuery += "WHERE ZLH_FILIAL = ? AND ZLH_CAMPO = 'OBSRET' AND D_E_L_E_T_ = ' ' "
+   cQuery += "ORDER BY ZLH_PEDIDO, ZLH_DATA, ZLH_HORA, R_E_C_N_O_ "
+   oStmt := FWExecStatement():New(cQuery)
+   oStmt:SetString(1, FWxFilial("ZLH"))
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      Do While !(cAl)->(Eof())
+         jObs[AllTrim((cAl)->ZLH_PEDIDO)] := TxtOut(AllTrim(cValToChar((cAl)->OBS)))
+         (cAl)->(DbSkip())
+      EndDo
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+   For nI := 1 to Len(aPed)
+      aPed[nI]["obsRetorno"] := IIf(ValType(jObs[aPed[nI]["pedido"]]) == "C", jObs[aPed[nI]["pedido"]], "")
+   Next nI
+Return Nil
+
+// Observacao do retorno gravada hoje (linha OBSRET mais recente), sem acento
+// convertido: para comparar com a nova e montar o historico
+Static Function ObsRetAtual(cPedido)
+   Local cRet   := ""
+   Local cAl    := GetNextAlias()
+   Local oStmt  := Nil
+   oStmt := FWExecStatement():New("SELECT " + ObsZlhSql() + " AS OBS FROM " + RetSqlName("ZLH") + ;
+      " WHERE ZLH_FILIAL = ? AND ZLH_PEDIDO = ? AND ZLH_CAMPO = 'OBSRET' AND D_E_L_E_T_ = ' ' " + ;
+      "ORDER BY ZLH_DATA DESC, ZLH_HORA DESC, R_E_C_N_O_ DESC")
+   oStmt:SetString(1, FWxFilial("ZLH"))
+   oStmt:SetString(2, cPedido)
+   cAl := oStmt:OpenAlias(cAl)
+   If !Empty(cAl) .and. Select(cAl) > 0
+      If !(cAl)->(Eof())
+         cRet := AllTrim(cValToChar((cAl)->OBS))
+      EndIf
+      (cAl)->(DbCloseArea())
+   EndIf
+   oStmt:Destroy()
+Return cRet
+
+// Texto numa linha so (quebras viram espaco), para o resumo do historico
+Static Function UmaLinha(cTxt)
+Return AllTrim(StrTran(StrTran(StrTran(cTxt, Chr(13) + Chr(10), " "), Chr(13), " "), Chr(10), " "))
+
+// Uma linha OBSRET na ZLH: texto inteiro no ZLH_OBS; antes/depois resumidos
+// (VALANT/VALNOV) para o historico da tela. Erro volta como aviso.
+Static Function GravaObsRet(cPedido, cAnt, cNova, cOrigem)
+   Local cErro  := ""
+   Local oErr   := Nil
+   Local aU     := UsrInfo()
+   Local bErrAn := ErrorBlock({|oE| Break(oE) })
+   Local cAcao  := IIf(Empty(cAnt), "I", IIf(Empty(cNova), "E", "A"))
+   Begin Sequence
+      DbSelectArea("ZLH")
+      RecLock("ZLH", .T.)
+      ZLH->ZLH_FILIAL := FWxFilial("ZLH")
+      ZLH->ZLH_PEDIDO := cPedido
+      ZLH->ZLH_ITEM   := ""
+      ZLH->ZLH_DATA   := Date()
+      ZLH->ZLH_HORA   := Time()
+      ZLH->ZLH_ACAO   := cAcao
+      ZLH->ZLH_ORIGEM := cOrigem
+      ZLH->ZLH_CAMPO  := "OBSRET"
+      ZLH->ZLH_TITULO := Left(TituloCampo("OBSRET"), TamSX3("ZLH_TITULO")[1])
+      ZLH->ZLH_VALANT := Left(UmaLinha(cAnt), TamSX3("ZLH_VALANT")[1])
+      ZLH->ZLH_VALNOV := Left(UmaLinha(cNova), TamSX3("ZLH_VALNOV")[1])
+      ZLH->ZLH_OBS    := cNova
+      ZLH->ZLH_CODUSR := aU[1]
+      ZLH->ZLH_USUARI := aU[2]
+      ZLH->(MsUnlock())
+   Recover Using oErr
+      cErro := "Gravado, mas a observacao do retorno falhou: " + TxtErro(oErr)
+   End Sequence
+   ErrorBlock(bErrAn)
+Return cErro
 
 // Numeros de serie da Z01 (como o RX Pedidos): em cada item, "numerosSerie" =
 // [[serie, nf], ...], com e sem NF. Lotes de 900 pedidos (limite do IN do
@@ -1209,7 +1362,7 @@ Return "CASE WHEN SC5.C5_TIPO IN ('D','B') THEN " + cA2 + " ELSE " + cA1 + " END
 
 // Campo de texto livre da SC5 na query, pelo tipo da coluna no Oracle: memo
 // real fica em BLOB/CLOB e nao sai direto num SELECT (2026-11-15b). Usado no
-// C5_ZOBS, no C5_ZOBSRET e no C5_MENNOTA (2026-11-23a). Campo que nao existe
+// C5_ZOBS e no C5_MENNOTA (2026-11-23a). Campo que nao existe
 // vira ' ' e entra em aFalta.
 Static Function ObsSql(cExist, aFalta, cCampo)
    Local cTipo := ""
@@ -1310,7 +1463,7 @@ Return cSN
 // Tamanho dos campos de texto (a tela limita a digitacao)
 Static Function Tamanhos()
    Local jT    := JsonObject():New()
-   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP", "C5_ESPECI1", "C5_ZOBS", "C5_ZOBSRET"}
+   Local aCpos := {"C5_ZCTE", "C5_ZCTEREE", "C5_ZFRETE", "C5_TRANSP", "C5_ESPECI1", "C5_ZOBS"}
    Local nI    := 0
    DbSelectArea("SC5")
    For nI := 1 to Len(aCpos)
@@ -1319,6 +1472,10 @@ Static Function Tamanhos()
          jT[aCpos[nI]] := TamSX3(aCpos[nI])[1]
       EndIf
    Next nI
+   // observacao do retorno (ZLH_OBS): limite so se for caracter
+   If TemObsRet() .and. TamSX3("ZLH_OBS")[3] != "M"
+      jT["ZLH_OBS"] := TamSX3("ZLH_OBS")[1]
+   EndIf
 Return jT
 
 // [[codigo, nome], ...] da SA4

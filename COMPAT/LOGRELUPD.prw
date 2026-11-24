@@ -69,12 +69,12 @@ User Function LOGRELUPD()
    EndIf
 Return
 
-// Campos que a API RESTLOGREL usa (para avisar se algum nao veio).
-// C5_ZOBSRET (observacao do retorno) entrou em 23/11/2026.
+// Campos que a API RESTLOGREL usa (para avisar se algum nao veio). A observacao
+// do retorno NAO e campo da SC5: fica na ZLH (ZLH_OBS, criado pelo usuario).
 Static Function Esperados()
 Return {"C5_ZCTE", "C5_ZCTEREE", "C5_ZDTENTR", "C5_ZDTENV", "C5_ZDTPREV", ;
    "C5_ZDTRET", "C5_ZFRETE", "C5_ZINDICA", "C5_ZMOTRET", "C5_ZNDENT", ;
-   "C5_ZOBS", "C5_ZOBSRET", "C5_ZPEDREN", "C5_ZREENTR", "C5_ZTPMAT", "C5_ZTPPEDI", ;
+   "C5_ZOBS", "C5_ZPEDREN", "C5_ZREENTR", "C5_ZTPMAT", "C5_ZTPPEDI", ;
    "C5_ZVCTERE", "C5_ZVLRCTE"}
 
 // ---------------------------------------------------------------- exportar

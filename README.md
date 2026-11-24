@@ -19,7 +19,7 @@ Faça tudo **fora do expediente**, nesta ordem. A homologação já está funcio
 1. Compile `COMPAT/LOGRELUPD.prw` na produção.
 2. Rode `U_LOGRELUPD` pelo menu, com ninguém usando pedidos de venda, e escolha **Importar**.
 3. Escolha o arquivo `.json` e confira a prévia. Ela deve mostrar:
-   - em "criar", os campos da logística que faltam (até 18; o `C5_ZOBSRET`, observação do retorno, entrou em 23/11/2026);
+   - em "criar", os campos da logística que faltam (até 17);
    - `C5_ZFRETE` em "já existem iguais", porque a tela de pedidos já usa esse campo;
    - a pasta 3 com um nome que faça sentido na tela de pedidos.
 
@@ -100,7 +100,7 @@ O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela c
 - tipo de material;
 - reentrega e indicador de atraso;
 - observações da entrega (`C5_ZOBS`), texto livre;
-- retorno: data, motivo, pedido do reenvio e **observação do retorno** (`C5_ZOBSRET`, texto livre, desde 23/11/2026; só com a data do retorno).
+- retorno: data, motivo, pedido do reenvio e **observação do retorno** (texto livre, desde 23/11/2026; só com a data do retorno). A observação **não é campo da SC5**: cada gravação vira uma linha da ZLH com o texto no `ZLH_OBS` (veja [Custos de frete e histórico](#custos-de-frete-e-histórico-zlc-e-zlh)).
 
 A gravação envia só o que mudou e fecha a gaveta. O botão "Fechar" pergunta antes se há alteração não salva.
 
@@ -139,7 +139,6 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZMOTRET` | Motivo do retorno (combo: 1=Recusa, 2=Endereço, 3=Avaria, 4=Outros) | só com data do retorno |
 | `C5_ZPEDREN` | Pedido do reenvio (o novo pedido que leva a mercadoria de novo) | só com data do retorno |
 | `C5_ZOBS` | Observações da entrega (texto livre; caracter ou memo) | sim |
-| `C5_ZOBSRET` | Observação do retorno à empresa (campo novo de 23/11/2026; sugestão: caracter 250, pasta 3) | só com data do retorno |
 | `C5_MENNOTA` | Mensagem para a nota (padrão do Protheus) | não |
 | `C5_TRANSP`, `C5_VOLUME1`, `C5_ESPECI1`, `C5_PESOL`, `C5_PBRUTO` | Transportadora, volume, espécie, peso líquido, peso bruto | só antes da NF |
 | `C5_FRETE`, `C5_ZFRETE` | Frete destacado, frete não destacado | só consulta (desde 15/11/2026) |
@@ -275,7 +274,7 @@ Os campos `C5_Z*` foram criados à mão na homologação. O `U_LOGRELUPD` copia 
    - campos que já existem com outro tipo ou tamanho, que **não são alterados**.
    Confirmado, ele cria os campos que faltam no fim da SC5 (`X3_ORDEM` novo), cria os gatilhos que faltam e roda o `X31UpdTable("SC5")`. Depois confere as colunas no banco.
 
-   Só cria os 18 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
+   Só cria os 17 campos que a API usa (`Esperados()` no fonte) e os gatilhos deles. Os outros `C5_Z*` do arquivo são de outras rotinas, como faturamento e financeiro. Se faltarem na produção, só aparecem listados na prévia.
 3. Todos saem e entram de novo no Protheus. Depois disso, publique a API e a tela na produção.
 
 A opção **Tabelas** do mesmo `U_LOGRELUPD` cria a ZLC e a ZLH e faz a carga inicial dos CTEs (veja o passo 1b da implantação).
@@ -301,6 +300,12 @@ Pedido do usuário em 19/11/2026: a transportadora às vezes manda o CTE com val
 A exclusão é lógica: a linha fica no banco, marcada como excluída, e o número do item não se repete.
 
 **ZLH, histórico da logística:** cada alteração feita pela tela, no pedido (campos da SC5) ou numa cobrança (ZLC). Guarda pedido, item da cobrança (vazio = pedido), data, hora, ação (inclusão, alteração, exclusão), origem (tela, importação, carga inicial), campo, título, valor antes, valor depois e o usuário. Só entra o que mudou de fato. Alteração feita fora da tela (por exemplo, no pedido de venda) não entra.
+
+**Observação do retorno na ZLH** (23/11/2026, pedido do usuário para não criar mais um campo na SC5): o usuário criou o campo `ZLH_OBS` direto no Configurador, sem compatibilizador.
+- Cada gravação da observação é uma linha da ZLH: `ZLH_CAMPO = OBSRET`, texto inteiro no `ZLH_OBS` e resumo em antes/depois (`ZLH_VALANT`/`ZLH_VALNOV`, até 250 caracteres), para aparecer no Histórico de alterações.
+- A tela mostra a linha mais recente do pedido. Apagar a observação grava uma linha de exclusão com o texto vazio.
+- O `ZLH_OBS` pode ser caracter ou memo: a API lê o memo real (BLOB/CLOB) e só limita o tamanho no caracter.
+- Sem a ZLH ou sem o `ZLH_OBS` no ambiente, o campo fica desligado na tela e aparece em "Campos que faltam" no Diagnóstico. **Na produção, o `ZLH_OBS` tem que ser criado igual ao da homologação.**
 
 **Importação por planilha:** continua. O CTE e o valor do envio e da reentrega vão para a 1ª cobrança de Envio e de Reentrega do pedido na ZLC, criada se não existir. O histórico marca essas linhas como importação.
 
