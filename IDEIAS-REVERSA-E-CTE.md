@@ -101,11 +101,11 @@ Então a entrada de retorno tem dois caminhos, e os dois levam à NF de remessa 
 
 - Como a equipe de faturamento lança a NF, tanto a de entrada do retorno quanto o CTE, e como cruzar essas informações no Protheus.
 - O frete de retorno vem somado no `C5_FRETE`/`C5_ZFRETE` da remessa ou é cobrado à parte?
-- Pode haver retorno parcial (só parte dos equipamentos)?
+- ~~Pode haver retorno parcial?~~ Respondido em 24/11: sim, e só é feita a entrada parcial. **Ideia do usuário:** um campo para os **números de série que voltam**, porque nas NFs do ERP antigo o Protheus não tem as séries (a Z01 só tem as de 2026).
 - ~~Quem lança a NF de entrada do retorno, e ela é lançada informando a NF de saída original?~~ Respondido em 24/11: sempre vinculada à NF de saída (do cliente ou entrada própria).
 - ~~Confirmar a saída das locações antigas~~ Respondido em 24/11: MATA920, TES 906 / CFOP 6908, com os dados da NF antiga.
-- ~~Quando o cliente emite a NF de devolução, qual rotina?~~ Respondido em 24/11: MATA103 (Devolução, formulário próprio = não, dados da NF do cliente, item amarrado à NF de saída). Falta a TES usada.
-- Combinações cruzadas existem? Remessa antiga (MATA920) com NF do cliente (MATA103), ou remessa do Protheus com entrada própria (MATA910)?
-- Remessas feitas no Protheus em 2026: pedido de venda com qual TES (também a 906)?
+- ~~Quando o cliente emite a NF de devolução, qual rotina?~~ Respondido em 24/11: MATA103 (Devolução, formulário próprio = não, dados da NF do cliente, item amarrado à NF de saída). TES: **456**, a mesma da MATA910 (respondido em 24/11).
+- ~~Combinações cruzadas existem?~~ Respondido em 24/11: **sim**. Por exemplo, remessa antiga lançada na MATA920 com retorno pela NF do cliente na MATA103.
+- ~~Remessas feitas no Protheus em 2026: qual TES?~~ Respondido em 24/11: **TES 607**.
 - Na chegada do equipamento existe algum registro no Protheus (conferência, transferência de armazém), ou só a logística sabe?
 - Depois que o equipamento chega, existe conferência técnica (armazém de conserto) que a logística acompanha, ou "recebido" encerra?

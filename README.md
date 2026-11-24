@@ -62,6 +62,8 @@ Hoje o PCP define por e-mail os pedidos que saem no dia, um analista preenche a 
 
 **Topo:** busca e filtros. Transportadora, UF, tipo de material, tipo de pedido e situação aceitam mais de uma opção (caixas de marcar). Há um filtro de data por emissão, entrega ou previsão de entrega, o botão "Limpar filtros" e os botões **Atualizar dados**, **Exportar XLSX**, **Importar planilha** e **Diagnóstico**.
 
+**Atualização automática** (24/11/2026, igual ao RX Pedidos): no topo, Desligada / 5 / 10 / 15 min (padrão 5; a escolha fica no navegador). A cada 15 s a tela confere se já passou o tempo e busca os dados sem trocar a tela por "Atualizando…". Não atualiza enquanto há pedido aberto, janela aberta, filtro aberto, gravação em andamento, pedido sendo arrastado ou campo em edição: o status mostra "aguardando: …" e a resposta é aplicada assim que liberar. Se falhar, os dados anteriores ficam na tela e tenta de novo no próximo ciclo. Mantém a rolagem da página e da Programação.
+
 **Exportar XLSX:** abre uma janela para escolher o que sai na planilha: todos os pedidos, previstos, faturados aguardando saída, enviados (em trânsito), entregues, atrasados (em trânsito e entregues com atraso), retornados ou com custo de frete em divergência, cada um com a contagem. Dá para aplicar ou não os filtros do topo e escolher as abas: **Pedidos** (uma linha por pedido, com todos os dados de logística e frete), **Itens** (uma linha por item, com NF e números de série) e **Custos de frete** (uma linha por cobrança). Cada aba sai como tabela do Excel, fonte Tahoma 10, com datas e valores como data e número. O gerador (`xlsx.ts`) é o mesmo do RX Pedidos, já usado dentro do Protheus. A Lista completa continua com o CSV. O Diagnóstico mostra o endereço do REST, a versão da API, o último erro e os campos que faltam na SC5.
 
 O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela carrega os pedidos com NF emitidos de 01/01 do ano anterior até hoje, e todos os sem NF; **Atualizar dados** repete a consulta com a data de hoje.
@@ -111,6 +113,8 @@ Em "Cliente e pedido" ficam:
 
 Dois blocos de frete e histórico:
 - **Custos de frete**, logo abaixo de "Envio e entrega" e sempre visível (pedido do usuário em 19/11/2026): a lista das cobranças do pedido (tipo, CTE ou documento, data, transportadora, valor e situação), com o total. "+ Adicionar cobrança" e "Editar" abrem um formulário curto, que grava na hora sem fechar a gaveta. Tipos: Envio, Reentrega, Armazenagem, Devolução, Outra taxa. Situações: OK, Divergente, Em contato, Ajustado, Aceito como veio. Com Divergente ou Em contato, o "valor esperado" (opcional) mostra a diferença. A exclusão pede confirmação e fica no histórico.
+  - **Sem CTE** (24/11/2026, pedido do usuário): caixa de marcar ao lado do CTE. Grava a marca `SEM CTE` no `ZLC_CTE`. Com valor, é frete pago sem CTE; com valor zero, é movimentação interna, sem cobrança. Na tabela aparece "Sem CTE" e, com valor zero, "sem cobrança".
+  - **Pendência de CTE:** qualquer cobrança lançada resolve, de qualquer tipo (envio, outra taxa…), com CTE, com texto ou "Sem CTE". Antes, só uma cobrança de Envio contava.
 - **Histórico de alterações**, no fim da gaveta e fechado até o clique: quem mudou o quê e quando, no pedido e nas cobranças (antes → depois), marcando o que veio da importação e da carga inicial.
 
 **Importar planilha** (atualização em massa):

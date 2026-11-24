@@ -221,7 +221,7 @@ function montar_(p, ctx) {
 const PEND_TXT = {
   transp: "transportadora", volume: "volume", especie: "espécie", peso: "peso",
   envio: "data de envio", previsao: "previsão de entrega", entrega: "data de entrega",
-  novaData: "nova data de entrega", cte: "CTE do envio", tpmat: "tipo de material",
+  novaData: "nova data de entrega", cte: "CTE ou custo de frete", tpmat: "tipo de material",
   indicador: "indicador de atraso", motivo: "motivo do retorno", reenvio: "pedido do reenvio",
 };
 function pendencias_(p, et, prazo, ctx) {
@@ -239,7 +239,8 @@ function pendencias_(p, et, prazo, ctx) {
     if (prazo === "semprev" && tem("C5_ZDTPREV")) out.push("previsao");
     if (et === "env" && prazo === "atrasado" && tem("C5_ZDTENTR")) out.push("entrega");
     if (et === "env" && p.reentrega === "SIM" && !p.dataNovaEntrega) out.push("novaData");
-    if (ctx.temCustos ? !(p.custos || []).some((c) => c.tipo === "E") : tem("C5_ZCTE") && !p.cte) out.push("cte");
+    // qualquer cobranca lancada (de qualquer tipo, com CTE, texto ou "Sem CTE") resolve (24/11/2026)
+    if (ctx.temCustos ? !(p.custos || []).length : tem("C5_ZCTE") && !p.cte) out.push("cte");
     if (tem("C5_ZTPMAT") && !p.tipoMaterial) out.push("tpmat");
     if (prazo === "atrasado" && tem("C5_ZINDICA") && !p.indicador) out.push("indicador");
   }

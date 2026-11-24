@@ -253,8 +253,22 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - **Todos os cartões de contagem dos Quadros filtram** ("em todos os cartões"): `cardsQuadros()` tem id, título, texto e filtro de cada um, e `e.fGlobal` guarda o id do cartão. A faixa `.filtro-ativo` diz quantos pedidos e qual cartão. Testado: os 9 cartões mostram exatamente o número que exibem.
   - **Programação:** a coluna **Não saíram** ganhou uma caixa de texto (`#kb-filtro-nao`, `fNaoSairam`, mesma busca normalizada do topo). Redesenha a tela e devolve o foco ao campo. O cabeçalho mostra "N de M · filtrado", e o cartão "Não saíram" segue com o total. Os 4 cartões da Programação viraram botões (`data-acao="ir"`): rolam até `kb-hoje`, `kb-nao`, `kb-ent` e `kb-sem` e destacam (`.destaque`).
   - Testado com a API falsa e Chrome headless: 21 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. Pacotes regerados.
+- **24/11/2026, pedido do usuário** (só a tela; a API continua `2026-11-23b`):
+  - **"Sem CTE" nos custos de frete:** a caixa `#cf-semcte` grava a marca `SEM_CTE = 'SEM CTE'` no `ZLC_CTE`. A API já aceita, porque a regra `SEM_VALOR` só barra valor 0 sem CTE, então não houve mudança na API. Com valor, é frete pago sem CTE; com valor 0, é movimentação interna sem cobrança. A tabela mostra o selo "Sem CTE" e "sem cobrança". `r.ctes` mostra "Sem CTE". O resumo do histórico gerado pela API fica "… - CTE SEM CTE …" (cosmético).
+  - **Pendência/aviso de CTE:** antes só uma cobrança tipo E contava, e o usuário lançava "Outra taxa" com texto e continuava com "falta CTE". Agora **qualquer cobrança** resolve, em `pendencias()`, no aviso da gaveta e em `pendencias_()` da planilha. Os textos mudaram para "CTE ou custo de frete". Depois de gravar uma cobrança, `atualizarForm()` refaz os avisos da gaveta.
+  - **Atualização automática igual à do RX Pedidos** (`TELA-RX/painel.ts`):
+    - botões no topo (`AUTO_OPCOES`), escolha guardada em `logrel-auto-min` (padrão 5);
+    - `setInterval` de 15 s, `verificarAuto`, `motivoEspera` (gaveta, modal, importação, XLSX, arrastando, filtro múltiplo aberto, gravação, campo em foco);
+    - resposta guardada em `auto.pendente` e aplicada quando liberar; `falhaAuto` mantém os dados;
+    - `app.ts` ganhou `carregar(…, silencioso)` e `parar()` no `ngOnDestroy`;
+    - preserva a rolagem da página e do `.kb-quadro`. O token já era renovado pelo REST (`token.interceptor.ts`, igual ao RX).
+  - **Testado** com a API falsa (com POST de custos e registro das consultas) e Chrome headless: 15 verificações ok.
+    - "Sem CTE" grava `cte: "SEM CTE"`, `valor: 0`; a pendência e o aviso somem.
+    - Com o relógio da página adiantado, a tela buscou sozinha. Com pedido aberto, mostrou "aguardando: pedido aberto" e não buscou.
+    - Sem erro de JavaScript.
 
 ## Pendências
+- **24/11/2026:** compilar o `logrel.app` novo (Sem CTE, pendência de CTE e atualização automática) na homologação e colar o `planilha/Codigo.gs` novo no Apps Script, porque a regra da pendência de CTE mudou.
 - **23/11/2026:**
   1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). O `logrel.app` da 2ª rodada (coluna Enviados hoje, cartões que filtram, filtro do Não saíram) também foi **compilado pelo usuário em 23/11**. Números esperados na tela, calculados pela API às 21:45 com as regras da tela:
      - cartões: informação faltando 510, saíram hoje 3 (000372, 000587, 000591, marcados "Saiu" no teste), em trânsito atrasados 1, faturados parados 96, sem previsão 3, sem dados para a NF-e 176;

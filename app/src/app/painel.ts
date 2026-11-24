@@ -13,7 +13,8 @@ import { Custo, CustoEdicao, HistLinha, ItemPedido, LogResposta, Opcao, Pedido, 
 export type AcaoNf = 'danfe';
 
 export interface Api {
-  carregar(de: string, ate: string): void;
+  /** silencioso = atualizacao automatica: sem "Atualizando…" e, se falhar, mantem os dados */
+  carregar(de: string, ate: string, silencioso?: boolean): void;
   /** origem 'importacao' marca o historico como importacao */
   salvar(recno: number, d: PedidoEdicao, origem?: string): Promise<Pedido>;
   /** Cobranca de frete (ZLC): incluir, alterar, excluir. API >= 2026-11-19a */
@@ -75,6 +76,10 @@ const TIPOCUSTO_PADRAO: Opcao[] = [['E', 'Envio'], ['R', 'Reentrega'], ['A', 'Ar
 const SITCUSTO_PADRAO: Opcao[] = [['D', 'Divergente'], ['C', 'Em contato'], ['A', 'Ajustado'], ['I', 'Aceito como veio']];
 /** Situacao da cobranca que ainda pede contato com a transportadora */
 const EM_ABERTO = ['D', 'C'];
+/** Cobranca sem CTE (24/11/2026): marca gravada no ZLC_CTE. Com valor = frete
+ *  pago sem CTE; valor zero = movimentacao interna, sem cobranca. Conta como
+ *  envio lancado (some a pendencia "CTE do envio"). */
+const SEM_CTE = 'SEM CTE';
 const COR_SITCUSTO: Record<string, string> = { '': 'noprazo', D: 'atrasado', C: 'reent', A: 'mat', I: 'semprev' };
 /** Campos da ZLC no historico */
 const ROTULO_CUSTO: Record<string, string> = {
@@ -143,7 +148,7 @@ const PEND_TXT: Record<Pend, [string, string]> = {
   previsao: ['Sem previsão de entrega', 'previsão de entrega'],
   entrega: ['Previsão vencida, sem data de entrega', 'data de entrega'],
   novaData: ['Reentrega sem a nova data de entrega', 'nova data de entrega'],
-  cte: ['Sem CTE do envio', 'CTE do envio'],
+  cte: ['Sem CTE / custo de frete lançado', 'CTE ou custo de frete'],
   tpmat: ['Sem tipo de material', 'tipo de material'],
   indicador: ['Atrasado sem indicador de atraso', 'indicador de atraso'],
   motivo: ['Sem motivo do retorno', 'motivo do retorno'],
@@ -271,6 +276,9 @@ const normal = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpper
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const rotMes = (m: string) => `${MESES[+m.slice(5, 7) - 1]}/${m.slice(2, 4)}`;
 const numTxt = (n: number) => (n ? n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+/** Intervalos da atualizacao automatica (minutos; 0 = desligada), igual ao RX Pedidos (24/11/2026) */
+const AUTO_OPCOES: [number, string][] = [[0, 'Desligada'], [5, '5 min'], [10, '10 min'], [15, '15 min']];
+
 function ler<T>(k: string, padrao: T): T {
   try {
     const v = localStorage.getItem('logrel-' + k);
@@ -353,6 +361,8 @@ export class Painel {
   private readonly hoje: Date;
   private tela = ler('tela', 'quadros');
   private salvando = false;
+  /** Atualizacao automatica: minutos (0 = desligada), proxima busca, motivo da espera e resposta guardada */
+  private readonly auto = { min: 5, proxima: 0, emCurso: false, espera: '', timer: 0, pendente: null as LogResposta | null };
   /** Programacao: pedidos gravando (botao desligado) e o que esta sendo arrastado */
   private readonly ocupados = new Set<number>();
   private arrastando = 0;
@@ -419,6 +429,11 @@ export class Painel {
         <div class="wrap">
           <div class="marca"><img class="logo" src="assets/vs_logo.png" alt="Videosoft"><div class="titulo"><h1>Logística · Pedidos de entrega</h1><span id="lg-sub"></span></div></div>
           <div class="acoes">
+            <div class="auto" role="group" aria-label="Atualização automática">
+              <span class="auto-rot">Atualização automática</span>
+              <div class="seg" id="lg-auto">${AUTO_OPCOES.map(([m, t]) => `<button type="button" data-auto="${m}" aria-pressed="false">${t}</button>`).join('')}</div>
+              <span class="auto-st" id="lg-auto-st" aria-live="polite"></span>
+            </div>
             <button class="btn pri" data-acao="consultar">Atualizar dados</button>
             <button class="btn" data-acao="xlsx">Exportar XLSX</button>
             <button class="btn" data-acao="importar">Importar planilha</button>
@@ -450,10 +465,111 @@ export class Painel {
     MULTI.forEach(([k]) => this.desenharMulti(k));
     this.ligarEventos();
     this.desenhar();
+    const min = ler<number>('auto-min', 5);
+    this.auto.min = AUTO_OPCOES.some(([m]) => m === min) ? min : 5;
+    this.auto.proxima = Date.now() + this.auto.min * 60000;
+    this.marcarAuto();
+    // Confere a cada 15 s; ao voltar para a tela, confere na hora
+    this.auto.timer = window.setInterval(() => this.verificarAuto(), 15000);
+    document.addEventListener('visibilitychange', this.aoVoltar);
+  }
+
+  /** Chamado pela casca ao fechar a tela */
+  parar(): void {
+    clearInterval(this.auto.timer);
+    document.removeEventListener('visibilitychange', this.aoVoltar);
+  }
+
+  // ---------- atualizacao automatica (mesma regra do RX Pedidos) ----------
+  private readonly aoVoltar = () => {
+    if (!document.hidden) this.verificarAuto();
+  };
+
+  private marcarAuto(): void {
+    this.raiz.querySelectorAll<HTMLElement>('#lg-auto [data-auto]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset['auto']) === this.auto.min)));
+    this.textoAuto();
+  }
+
+  private textoAuto(): void {
+    const st = this.raiz.querySelector('#lg-auto-st') as HTMLElement | null;
+    if (!st) return;
+    const hm = (ms: number) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    if (!this.auto.min) st.textContent = 'desligada';
+    else if (this.auto.emCurso || this.carregando) st.textContent = 'atualizando…';
+    else if (this.auto.espera && Date.now() >= this.auto.proxima) st.textContent = `aguardando: ${this.auto.espera}`;
+    else st.textContent = `próxima às ${hm(this.auto.proxima)}`;
+  }
+
+  /** Por que nao da para atualizar agora sem atrapalhar quem esta usando ('' = pode) */
+  private motivoEspera(): string {
+    if (document.hidden) return 'tela em segundo plano';
+    if (this.carregando || this.salvando || this.salvandoCusto || this.ocupados.size) return 'gravação em andamento';
+    if (this.el.camada.querySelector('.gaveta')) return 'pedido aberto';
+    if (this.el.camada.querySelector('.modal') || this.imp || this.xl) return 'janela aberta';
+    if (this.arrastando) return 'arrastando pedido';
+    if ([...this.raiz.querySelectorAll<HTMLElement>('.multi-painel')].some((m) => !m.hidden)) return 'filtro aberto';
+    const f = document.activeElement as HTMLElement | null;
+    if (f && this.el.conteudo.contains(f) && /^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName)) return 'campo em edição';
+    return '';
+  }
+
+  private verificarAuto(): void {
+    // Resposta automatica que chegou com a gaveta/janela aberta: aplica quando liberar
+    if (this.auto.pendente) {
+      this.auto.espera = this.motivoEspera();
+      if (!this.auto.espera) {
+        const r = this.auto.pendente;
+        this.auto.pendente = null;
+        this.definirDados(r);
+      }
+      this.textoAuto();
+      return;
+    }
+    if (!this.auto.min || this.auto.emCurso || Date.now() < this.auto.proxima) {
+      this.textoAuto();
+      return;
+    }
+    this.auto.espera = this.motivoEspera();
+    if (!this.auto.espera) {
+      this.auto.emCurso = true;
+      const ate = new Date();
+      ate.setHours(0, 0, 0, 0);
+      this.e.ate = ate;
+      this.api.carregar(iso(this.e.de), iso(ate), true);
+    }
+    this.textoAuto();
+  }
+
+  /** Erro na atualizacao automatica: mantem os dados na tela e tenta no proximo ciclo */
+  falhaAuto(msg: string): void {
+    this.auto.emCurso = false;
+    this.auto.proxima = Date.now() + this.auto.min * 60000;
+    this.aviso(`A atualização automática falhou; os dados na tela são de antes. ${msg}`, true);
+    this.textoAuto();
   }
 
   // ---------- dados ----------
   definirDados(r: LogResposta): void {
+    // Automatica que chegou com pedido ou janela aberta (ou campo em edicao): trocar
+    // os dados agora atrapalharia. Guarda e aplica quando liberar (verificarAuto).
+    if (this.auto.emCurso) {
+      this.auto.emCurso = false;
+      const m = this.motivoEspera();
+      if (m && m !== 'tela em segundo plano') {
+        this.auto.pendente = r;
+        this.auto.espera = m;
+        this.textoAuto();
+        return;
+      }
+    }
+    this.auto.pendente = null;
+    // Qualquer carga (manual ou automatica) reinicia a contagem e preserva a rolagem
+    const rolagem = document.scrollingElement?.scrollTop ?? 0;
+    const kb = this.el.conteudo.querySelector('.kb-quadro') as HTMLElement | null;
+    const rolKb = kb ? kb.scrollLeft : 0;
+    this.auto.emCurso = false;
+    this.auto.espera = '';
+    this.auto.proxima = Date.now() + this.auto.min * 60000;
     this.resp = r;
     this.faltando = new Set(r.camposFaltando || []);
     // API anterior a 2026-11-15a nao le nem grava especie e pesos: desliga os campos
@@ -473,6 +589,10 @@ export class Painel {
       ? `<p class="aviso"><b>Campos ainda não criados na SC5 deste ambiente:</b> ${esc([...this.faltando].join(', '))}. Eles aparecem vazios e a edição deles fica desligada.</p>`
       : '';
     this.desenhar();
+    if (document.scrollingElement) document.scrollingElement.scrollTop = rolagem;
+    const kb2 = this.el.conteudo.querySelector('.kb-quadro') as HTMLElement | null;
+    if (kb2) kb2.scrollLeft = rolKb;
+    this.textoAuto();
     // Gaveta aberta numa recarga: redesenha com o pedido novo (ou fecha se sumiu)
     if (this.aberto) {
       if (this.reg(this.aberto)) this.gaveta(this.aberto);
@@ -516,7 +636,7 @@ export class Painel {
     const produtos = [...new Set(itens.map((i) => i.descricao))].join(' · ');
     const cus = this.temCustos ? p.custos || [] : null;
     const abertos = cus ? cus.filter((c) => EM_ABERTO.includes(c.situacao)) : [];
-    const ctes = cus ? cus.map((c) => c.cte).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean);
+    const ctes = cus ? cus.map((c) => (c.cte === SEM_CTE ? 'Sem CTE' : c.cte)).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean);
     const pend = this.pendencias(p, et, prazo);
     return {
       p,
@@ -557,7 +677,8 @@ export class Painel {
       if (prazo === 'semprev' && tem(CAMPO.dataPrevisao)) out.push('previsao');
       if (et === 'env' && prazo === 'atrasado' && tem(CAMPO.dataEntrega)) out.push('entrega');
       if (et === 'env' && p.reentrega === 'SIM' && !p.dataNovaEntrega) out.push('novaData');
-      if (this.temCustos ? !(p.custos || []).some((c) => c.tipo === 'E') : tem(CAMPO.cte) && !p.cte) out.push('cte');
+      // qualquer cobranca lancada (de qualquer tipo, com CTE, texto ou "Sem CTE") resolve (24/11/2026)
+      if (this.temCustos ? !(p.custos || []).length : tem(CAMPO.cte) && !p.cte) out.push('cte');
       if (tem(CAMPO.tipoMaterial) && !p.tipoMaterial) out.push('tpmat');
       if (prazo === 'atrasado' && tem(CAMPO.indicador) && !p.indicador) out.push('indicador');
     }
@@ -616,7 +737,7 @@ export class Painel {
   }
   /** CTE para os cartoes: o 1o da lista */
   private cteTxt(r: Reg): string {
-    return r.ctes.length ? ` · CTE ${esc(r.ctes[0])}${r.ctes.length > 1 ? ` +${r.ctes.length - 1}` : ''}` : '';
+    return r.ctes.length ? ` · ${r.ctes[0] === 'Sem CTE' ? '' : 'CTE '}${esc(r.ctes[0])}${r.ctes.length > 1 ? ` +${r.ctes.length - 1}` : ''}` : '';
   }
   private transpNome(r: Reg): string {
     return r.p.transportadoraNome || (r.p.transportadora ? `Cód. ${r.p.transportadora}` : 'Sem transportadora');
@@ -1860,10 +1981,10 @@ export class Painel {
         return `<tr class="sem-clique${ed ? ' editando' : ''}">
           <td class="mono">${esc(c.item)}</td>
           <td>${esc(this.txtCusto('tipoCusto', c.tipo))}</td>
-          <td class="mono">${esc(c.cte) || '<span class="muted">–</span>'}</td>
+          <td class="mono">${c.cte === SEM_CTE ? '<span class="pill semprev">Sem CTE</span>' : esc(c.cte) || '<span class="muted">–</span>'}</td>
           <td>${fmt(c.data) || '<span class="muted">–</span>'}</td>
           <td class="quebra">${esc(c.transportadoraNome || c.transportadora || '–')}</td>
-          <td class="dir num">${rs(c.valor)}${dif ? `<span class="cod-linha crit-txt">esperado ${rs(c.valorEsperado)} (${dif > 0 ? '+' : ''}${rs(dif)})</span>` : ''}</td>
+          <td class="dir num">${rs(c.valor)}${c.cte === SEM_CTE && !c.valor ? '<span class="cod-linha muted">sem cobrança</span>' : ''}${dif ? `<span class="cod-linha crit-txt">esperado ${rs(c.valorEsperado)} (${dif > 0 ? '+' : ''}${rs(dif)})</span>` : ''}</td>
           <td><span class="pill ${COR_SITCUSTO[c.situacao] || 'semprev'}">${esc(this.txtCusto('situacaoCusto', c.situacao))}</span></td>
           <td class="dir"><button type="button" class="btn-txt" data-acao="custo-editar" data-item="${esc(c.item)}" ${this.salvandoCusto ? 'disabled' : ''}>Editar</button></td>
         </tr>${c.obs || c.usuario ? `<tr class="sem-clique sub"><td></td><td colspan="7">${c.obs ? `${esc(c.obs)} · ` : ''}<span class="muted">${esc(c.usuario)}${c.alteradoEm ? ` em ${fmt(c.alteradoEm.slice(0, 10))} ${esc(c.alteradoEm.slice(11, 16))}` : ''}</span></td></tr>` : ''}`;
@@ -1891,16 +2012,19 @@ export class Painel {
     const tr = v.transportadora ? `${v.transportadora} - ${transps.find(([k]) => k === v.transportadora)?.[1] || v.transportadoraNome || ''}` : '';
     const ops = (o: Opcao[], sel: string, vazio = '') => `${vazio ? `<option value="">${esc(vazio)}</option>` : ''}${o.map(([k, t]) => `<option value="${esc(k)}" ${k === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
     const dis = this.salvandoCusto ? 'disabled' : '';
+    const semCte = v.cte === SEM_CTE;
     return `<div class="cform" id="lg-cform">
       <div class="cform-tit">${c ? `Editando a cobrança ${esc(c.item)}` : 'Nova cobrança'}</div>
       <div class="cform-grade">
         <div class="campo"><label for="cf-tipo">Tipo</label><select id="cf-tipo" ${dis}>${ops(this.opCusto('tipoCusto'), v.tipo)}</select></div>
-        <div class="campo"><label for="cf-cte">CTE / documento</label><input id="cf-cte" type="text" maxlength="20" value="${esc(v.cte)}" ${dis}></div>
+        <div class="campo"><label for="cf-cte">CTE / documento</label><input id="cf-cte" type="text" maxlength="20" value="${esc(semCte ? '' : v.cte)}" ${dis} ${semCte ? 'disabled' : ''}>
+          <label class="check-sem-cte"><input type="checkbox" id="cf-semcte" ${semCte ? 'checked' : ''} ${dis}> Sem CTE</label></div>
         <div class="campo"><label for="cf-data">Data</label><div class="com-hoje"><input id="cf-data" type="date" value="${esc(v.data)}" ${dis}><button type="button" class="btn-txt" data-acao="cf-hoje" ${dis}>Hoje</button></div></div>
         <div class="campo inteiro"><label for="cf-transp">Transportadora</label><input id="cf-transp" list="lg-transps" value="${esc(tr)}" placeholder="Código ou nome" ${dis}></div>
         <div class="campo"><label for="cf-valor">Valor cobrado (R$)</label><input id="cf-valor" type="text" inputmode="decimal" value="${esc(numTxt(v.valor))}" ${dis}></div>
         <div class="campo"><label for="cf-situa">Situação</label><select id="cf-situa" ${dis}>${ops(this.opCusto('situacaoCusto'), v.situacao, 'OK (sem divergência)')}</select></div>
         <div class="campo"><label for="cf-esp">Valor esperado (R$)</label><input id="cf-esp" type="text" inputmode="decimal" value="${esc(numTxt(v.valorEsperado))}" placeholder="o combinado, se divergente" ${dis}></div>
+        <p class="nota inteiro" id="cf-dica-sem" ${semCte ? '' : 'hidden'}>Sem CTE: com valor = frete pago sem CTE; valor zero = movimentação interna, sem cobrança. Conta como envio lançado.</p>
         <div class="campo inteiro"><label for="cf-obs">Observação</label><textarea id="cf-obs" rows="2" maxlength="250" placeholder="O que foi combinado, com quem e quando" ${dis}>${esc(v.obs)}</textarea></div>
         <div class="inteiro acoes-cform">
           ${c ? `<button type="button" class="btn-txt perigo" data-acao="custo-excluir" ${dis}>Excluir cobrança</button>` : ''}
@@ -1942,13 +2066,17 @@ export class Painel {
     } else {
       const valor = numBR(q<HTMLInputElement>('cf-valor')?.value || '');
       const esp = numBR(q<HTMLInputElement>('cf-esp')?.value || '');
-      const cte = (q<HTMLInputElement>('cf-cte')?.value || '').trim().toUpperCase();
+      // "Sem CTE" (pedido do usuario, 24/11/2026): grava a marca SEM CTE no ZLC_CTE;
+      // com valor = frete pago sem CTE, valor zero = movimentacao interna sem cobranca
+      const semCte = !!q<HTMLInputElement>('cf-semcte')?.checked;
+      const cte = semCte ? SEM_CTE : (q<HTMLInputElement>('cf-cte')?.value || '').trim().toUpperCase();
       const trTxt = (q<HTMLInputElement>('cf-transp')?.value || '').trim();
       const tr = trTxt.includes(' - ') ? trTxt.split(' - ')[0].trim() : trTxt.toUpperCase();
       const situ = q<HTMLSelectElement>('cf-situa')?.value || '';
       if (Number.isNaN(valor) || valor < 0) return msg('Valor cobrado inválido (use 1.234,56).');
       if (Number.isNaN(esp) || esp < 0) return msg('Valor esperado inválido (use 1.234,56).');
-      if (!valor && !cte) return msg('Informe o valor ou o número do CTE/documento.');
+      if (!valor && !cte) return msg('Informe o valor, o número do CTE/documento ou marque "Sem CTE".');
+      if (cte === SEM_CTE && !semCte) return msg('Para lançar sem CTE, marque a opção "Sem CTE".');
       if (tr && !(this.resp?.transportadoras || []).some(([k]) => k === tr)) return msg(`Transportadora "${tr}" não encontrada no cadastro (escolha na lista).`);
       Object.assign(corpo, {
         tipo: q<HTMLSelectElement>('cf-tipo')?.value || 'O',
@@ -1993,6 +2121,8 @@ export class Painel {
       if (this.hist) void this.carregarHist();
       this.redesenharCustos();
       this.desenhar();
+      // os avisos da gaveta ("Falta lançar o CTE"...) dependem das cobrancas: refaz
+      this.atualizarForm();
       this.aviso(acao === 'excluir' ? 'Cobrança excluída.' : acao === 'incluir' ? 'Cobrança incluída.' : 'Cobrança salva.');
       if (novo?.avisoHistorico) this.aviso(novo.avisoHistorico, true);
     } catch (e) {
@@ -2208,7 +2338,7 @@ export class Painel {
     if (!final && !ret && prev && prev < iso(this.hoje) && env && !v.indicador) avisos.push('Previsão vencida e sem entrega: escolha o indicador de atraso.');
     if (v.reentrega === 'S' && !nova) avisos.push('Reentrega sem a nova data de entrega: o pedido continua em Enviados até ela ser informada.');
     if (this.temCustos) {
-      if (env && !(p.custos || []).some((c) => c.tipo === 'E')) avisos.push('Falta lançar o CTE do envio em Custos de frete.');
+      if (env && !(p.custos || []).length) avisos.push('Falta lançar o CTE em Custos de frete (ou marcar "Sem CTE" para movimentação interna ou frete sem CTE).');
     } else if (env && !v.cte) avisos.push('Falta o número do CTE.');
     const sai = v.previsaoSaida || '';
     if (sai && !env && sai < iso(this.hoje)) avisos.push(`A saída programada (${fmt(sai)}) passou e o pedido não saiu: informe a data de envio ou reprograme.`);
@@ -2717,6 +2847,16 @@ export class Painel {
         this.acaoNota(nf.dataset['nf'] as AcaoNf, nf.dataset['nota'] as string, nf.dataset['serie'] || '', nf.dataset['pedido'] as string);
         return;
       }
+      const au = t.closest('[data-auto]') as HTMLElement | null;
+      if (au) {
+        this.auto.min = Number(au.dataset['auto']) || 0;
+        this.auto.proxima = Date.now() + this.auto.min * 60000;
+        this.auto.espera = '';
+        guardar('auto-min', this.auto.min);
+        this.marcarAuto();
+        this.aviso(this.auto.min ? `Atualização automática a cada ${this.auto.min} minutos.` : 'Atualização automática desligada.');
+        return;
+      }
       const kb = t.closest('[data-kb]') as HTMLElement | null;
       if (kb) {
         ev.stopPropagation();
@@ -2924,6 +3064,18 @@ export class Painel {
       this.atualizarForm();
     });
     this.el.camada.addEventListener('submit', (ev) => ev.preventDefault());
+    // Cobranca: "Sem CTE" desliga o numero do CTE e mostra a explicacao
+    this.el.camada.addEventListener('change', (ev) => {
+      const t = ev.target as HTMLInputElement;
+      if (t.id !== 'cf-semcte') return;
+      const cte = this.el.camada.querySelector('#cf-cte') as HTMLInputElement | null;
+      if (cte) {
+        cte.disabled = t.checked;
+        if (t.checked) cte.value = '';
+      }
+      const dica = this.el.camada.querySelector('#cf-dica-sem') as HTMLElement | null;
+      if (dica) dica.hidden = !t.checked;
+    });
     // Exportar XLSX: qualquer opcao redesenha as contagens
     this.el.camada.addEventListener('change', (ev) => {
       const t = ev.target as HTMLInputElement;

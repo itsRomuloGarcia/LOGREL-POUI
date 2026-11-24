@@ -36,7 +36,7 @@ export class App implements AfterViewInit, OnDestroy {
     this.painel = new Painel(
       this.raiz.nativeElement,
       {
-        carregar: (d, a) => this.carregar(d, a),
+        carregar: (d, a, s) => this.carregar(d, a, s),
         salvar: (r, d, o) => this.guardarErro('Salvar pedido', firstValueFrom(this.log.salvar(r, d, o))),
         salvarCusto: (d) => this.guardarErro('Salvar cobrança de frete', firstValueFrom(this.log.salvarCusto(d))),
         historico: (p) => this.guardarErro('Histórico do pedido', firstValueFrom(this.log.historico(p))).then((r) => r?.historico || []),
@@ -55,6 +55,7 @@ export class App implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.consulta?.unsubscribe();
+    this.painel?.parar();
   }
 
   /** Guarda o erro de gravacao (status, URL e corpo da resposta) para o Diagnostico */
@@ -77,9 +78,10 @@ export class App implements AfterViewInit, OnDestroy {
     }
   }
 
-  private carregar(de: string, ate: string): void {
+  /** silencioso = atualizacao automatica: nao troca a tela por "Atualizando…" e, se falhar, mantem os dados */
+  private carregar(de: string, ate: string, silencioso = false): void {
     this.consulta?.unsubscribe();
-    this.painel.marcarCarregando();
+    if (!silencioso) this.painel.marcarCarregando();
     this.consulta = this.log.buscar(de, ate).subscribe({
       next: (r) => {
         this.versaoApi = r.versao || '(sem versao)';
@@ -87,8 +89,9 @@ export class App implements AfterViewInit, OnDestroy {
         this.painel.definirDados(r);
       },
       error: (e) => {
-        this.ultimoErro = `${new Date().toLocaleTimeString('pt-BR')} Consulta: ${mensagemErro(e)}`;
-        this.painel.marcarErro(mensagemErro(e));
+        this.ultimoErro = `${new Date().toLocaleTimeString('pt-BR')} ${silencioso ? 'Atualizacao automatica' : 'Consulta'}: ${mensagemErro(e)}`;
+        if (silencioso) this.painel.falhaAuto(mensagemErro(e));
+        else this.painel.marcarErro(mensagemErro(e));
       },
     });
   }
