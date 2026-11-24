@@ -1,6 +1,8 @@
 # Ideia em estudo: logística reversa e CTEs de entrada
 
-**Situação (24/11/2026): só ideia. Nada foi implementado nem alterado.** Em 24/11 o usuário explicou como o retorno de locação é lançado (seção abaixo). O usuário vai estudar como o faturamento lança as NFs e como cruzar essas informações no Protheus. Com as respostas dele, a conversa continua deste ponto.
+**Situação (24/11/2026): o projeto começou.** O usuário pediu para começar e perguntou o que mais falta saber. Nada foi implementado ainda. Em 24/11 o usuário também explicou como o retorno de locação é lançado (seção abaixo).
+
+**Solicitação de coleta (usuário, 24/11/2026):** chega por e-mail, então **não há como prever no sistema**, a não ser quando a NF de devolução é lançada antes da coleta. Consequência para o desenho: a reversa só aparece sozinha a partir da NF de entrada (x909). Antes dela, só existe se a logística cadastrar a partir do e-mail.
 
 ## Pedido do usuário
 

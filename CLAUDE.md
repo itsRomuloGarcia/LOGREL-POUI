@@ -273,7 +273,8 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
 - **24/11/2026 (4ª):** a busca "000287" trazia também 8 pedidos cuja NF contém o número (NF 000002871…). Em `base()`, número de até 6 dígitos que é um pedido (`padStart(6, "0")`) filtra **só esse pedido** em toda a tela; outros números e textos seguem a busca normal. Na homologação o 000287 está em **Enviados** (NF 24/09, envio 13/11, sem entrega). Se o usuário não o viu nos quadros, provavelmente era a produção, ainda com a tela de 19/11, ou um entregue há mais de 30 dias, que é o corte corrigido no commit anterior.
 
 ## Pendências
-- **24/11/2026:** compilar o `logrel.app` novo (Sem CTE, pendência de CTE e atualização automática) na homologação e colar o `planilha/Codigo.gs` novo no Apps Script, porque a regra da pendência de CTE mudou.
+- **24/11/2026, feito (informado pelo usuário):** a produção está compilada (API `2026-11-23b` e `logrel.app` de 24/11) e a planilha Google está ativa. As pendências de 22/11 e 23/11 sobre a compilação na produção e a planilha ficam resolvidas.
+- **24/11/2026, projeto da logística reversa começou** (ver `IDEIAS-REVERSA-E-CTE.md`).
 - **23/11/2026:**
   1. Homologação: a API `2026-11-23b` e o `logrel.app` foram compilados pelo usuário e conferidos pela API em 23/11 (2.840 pedidos, endereço em 2.838, C5_MENNOTA em 2.770, `ZLH_OBS` C 250, 511 pedidos com informação faltando). O `logrel.app` da 2ª rodada (coluna Enviados hoje, cartões que filtram, filtro do Não saíram) também foi **compilado pelo usuário em 23/11**. Números esperados na tela, calculados pela API às 21:45 com as regras da tela:
      - cartões: informação faltando 510, saíram hoje 3 (000372, 000587, 000591, marcados "Saiu" no teste), em trânsito atrasados 1, faturados parados 96, sem previsão 3, sem dados para a NF-e 176;
@@ -284,7 +285,7 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   2. Conferir: gravar e alterar uma observação de retorno (aparece no Histórico); endereço e C5_MENNOTA na gaveta.
   3. Produção: criar o `ZLH_OBS` igual ao da homologação e depois compilar os mesmos fontes.
   5. Colar o `planilha/Codigo.gs` novo no Apps Script.
-- **22/11/2026, ideia em estudo (nada implementado): logística reversa e CTEs de entrada.** Desenho, respostas do usuário e perguntas em aberto estão em `IDEIAS-REVERSA-E-CTE.md`. O usuário vai estudar como o faturamento lança as NFs e como cruzar isso no Protheus. **Não implementar antes dessas respostas.**
+- **22/11/2026, ideia em estudo (nada implementado): logística reversa e CTEs de entrada.** Desenho, respostas do usuário e perguntas em aberto estão em `IDEIAS-REVERSA-E-CTE.md`. O usuário vai estudar como o faturamento lança as NFs e como cruzar isso no Protheus. **Não implementar antes dessas respostas.** Em 24/11 o usuário pediu para começar o projeto. As perguntas de 24/11 estão no documento.
 - **22/11/2026:** criar a planilha Google, colar o `planilha/Codigo.gs`, cadastrar as propriedades (REST da produção 10407, usuário de leitura) e ligar a atualização automática. Conferir as contagens do Resumo com a tela.
 - **19/11/2026 (4ª):** compilar `RESTLOGREL.tlpp` `2026-11-19c` (inclui a 19b, TES 610) e o `logrel.app` de 19/11 (telefone; inclui custos visíveis e Exportar XLSX).
 - **19/11/2026 (3ª):** compilar o `RESTLOGREL.tlpp` `2026-11-19b` (TES 610) na homologação; conferir 000039 e 000432 na tela. Rodar a comparação da planilha com a produção (só leitura) quando houver permissão.
