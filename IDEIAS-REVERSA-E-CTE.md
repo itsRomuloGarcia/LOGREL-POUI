@@ -44,6 +44,46 @@ O usuário quer adaptar isso ao que já existe.
 
 **Diagnóstico escrito (API `2026-11-24a`):** `GET /logistica/reversa/diagnostico`. Primeiro na homologação, que tem cópia da produção até agosto de 2026.
 
+## Resultado do diagnóstico `2026-11-24a` na homologação (24/11/2026)
+
+Base da homologação = cópia da produção até agosto de 2026; desde 12/2024. Rodou em 3,5 s, sem erro. Os números são ordem de grandeza.
+
+**TES (filial 0101)**
+| Remessa | Retorno | Uso |
+|---|---|---|
+| 607 (5908/6908, estoque S, poder de terceiros R) | 407 (1909/2909, tipo B, poder D) | locação feita no Protheus em 2026 |
+| 606 (5908/6908, estoque S, poder R) | 406 (tipo B, poder D) | comodato feito no Protheus em 2026 |
+| 906 (5908/6908, estoque N, sem poder de terceiros) | 456 (tipo D, estoque S) | remessa do ERP antigo lançada na MATA920 |
+
+Há também 250/251 (entrada de comodato), 950/951 (retorno de bem recebido) e 610 (conserto), fora do escopo.
+
+**Retornos (entradas x909), jan-ago/2026:** 553 NFs (≈ 70/mês) e 576 itens.
+- Entrada própria (`F1_FORMUL = S`): ≈ 363 NFs. NF do cliente: ≈ 190.
+- **Toda entrada movimenta estoque** (`D1_NUMSEQ` preenchido), inclusive a própria, que é emitida **antes da coleta**: o saldo entra no armazém antes de o equipamento chegar.
+- Armazém: **02 RECEBIMENTO** (331 itens), **06 EXPEDIÇÃO** (237), 01 (8).
+- NF do cliente: a digitação pode ser bem depois da emissão (ex.: emissão 21/05, digitação 05/08).
+- `D1_ORIGLAN = LF` (lançamento fiscal manual) em ≈ 26 NFs; o resto pela rotina normal.
+
+**Ligação com a remessa:** quase todas as entradas têm `D1_NFORI`.
+- 483 itens apontam remessa **sem pedido** (TES 906, MATA920): o equipamento ficou ≈ 500 dias no cliente (de 26 a 2.436).
+- 57 itens apontam remessa **com pedido** (606/607 de 2026): de 1 a 182 dias. As REM com TES 606 voltam em ≈ 17 dias.
+- 35 itens com `D1_NFORI` cuja remessa não foi achada (NF antiga não lançada ou número diferente).
+
+**Equipamentos no cliente (remessa menos o que voltou pelo `D1_NFORI`)**
+- 2026, TES 607 LOC: 920 unidades enviadas, 50 voltaram, **870 no cliente** (662 itens).
+- 2026, TES 606/607 REM: 83 no cliente; VEN/VAV com TES 607: 11 (a conferir).
+- As remessas antigas (906) só existem no Protheus quando voltam, então o saldo delas (≈ 79) é resto de retorno parcial ou de item que não casou.
+- 606/607 controlam **poder de terceiros** (F4_PODER3 R/D): o saldo das remessas de 2026 também deve estar na SB6.
+
+**Frete cobrado das locações:** dos 708 pedidos LOC de 2026, **nenhum tem `C5_FRETE`**; 398 têm `C5_ZFRETE`. O frete (ida + volta) está no **frete não destacado**.
+
+**CTEs de entrada (jan-ago/2026):** 3.135 CTEs (≈ 390/mês), R$ 1,6 mi; 350 são complementares (tipo C). Todos com chave, menos 1. TES 205, CFOP 1352/2352 (e 1932/2932, 1353/2353). Maiores: Jamef (1.424), Multi Service (555, o maior valor), Movvi (531), Azul (371), Bertolini (61).
+- **CTEs da ZLC no fiscal:** 2.566 linhas na ZLC; 2.049 achadas no fiscal pelo número, 2.024 com o mesmo valor. A ZLC vai até 12/11 e o fiscal da homologação só até agosto: na produção a taxa deve ser maior.
+- **XML do importador existe:** SDS (7.113 documentos, com `DS_CHAVENF`, `DS_TPCTE`, `DS_CHVNFOR`) e SDT (10.755 itens, com `DT_CHVNFO`). Se o CTE importado guarda a chave da NF transportada, **o CTE pode ser ligado sozinho** à NF de saída (pedido) ou à NF de entrada própria (reversa). A conferir num próximo diagnóstico.
+- CKO e C00 não existem.
+
+**Nomes Z em uso:** Z01, ZDM, ZFM, ZGM, ZGZ, ZHE, ZLC, ZLH, ZXA, ZXB (e ZAUDIT). Livres para a reversa: ZLR, ZLI, ZLQ.
+
 ## Cadastro da coleta (proposta de 24/11/2026, aprovada como beta)
 
 Botão **Nova coleta** na aba Reversa:
