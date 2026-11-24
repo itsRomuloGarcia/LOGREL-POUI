@@ -22,6 +22,32 @@ O usuário quer adaptar isso ao que já existe.
 4. **Contrato:** não existe contrato no Protheus para locação ou comodato.
 5. **Onde fica a reversa:** numa aba nova, separada, para não misturar com as saídas.
 
+## Respostas do usuário (24/11/2026, 2ª rodada)
+
+1. **Solicitação e cotação:** o cliente pede a coleta por e-mail. Antes é feita uma **cotação**. A NF **sempre** é emitida para a coleta, porque sem ela a transportadora não coleta. O usuário quer o controle no sistema e pensou em **digitar o CNPJ do cliente** e vincular a partir dele.
+2. **A NF de entrada própria é emitida antes da coleta.**
+3. **Chegada:** o fiscal dá a entrada da NF, e o saldo vai para um armazém. A conferir no diagnóstico: qual movimento é esse (a MATA910 não movimenta estoque; ver se é MATA103, classificação ou transferência) e qual armazém.
+4. **A reversa encerra na chegada.** Não há acompanhamento de conserto pela logística.
+5. Perguntou como seria o cadastro: proposta na seção "Cadastro da coleta".
+6. **O frete de retorno vem somado no frete da remessa** (`C5_FRETE`/`C5_ZFRETE`).
+7. **A empresa paga a transportadora** na reversa.
+8. **Números de série que voltam:** muitas vezes vêm no e-mail. Quando não vêm, são digitados na chegada.
+9. **Escopo inicial: só locação e comodato.**
+
+## Cadastro da coleta (proposta de 24/11/2026, a confirmar com o usuário)
+
+Botão **Nova coleta** na aba Reversa:
+1. **Cliente:** digitar o CNPJ (ou código/nome). A tela busca no SA1 e mostra nome, endereço de coleta, cidade/UF e telefone.
+2. **Equipamentos no cliente:** remessas de locação/comodato daquele cliente que ainda não voltaram (CFOP x908, TES 607/906), com NF, data, produto, quantidade e números de série da Z01 (só as de 2026). A logística marca o que volta e quanto (retorno parcial). Equipamento do ERP antigo, que não está no Protheus, entra à mão: produto, quantidade e séries.
+3. **Solicitação:** data do e-mail, quem pediu (nome, e-mail, telefone), séries informadas no e-mail e observação.
+4. **Cotação:** transportadora escolhida, valor cotado e data agendada da coleta.
+
+Etapas: **Solicitada** → **Coleta agendada** (transportadora e data) → **NF emitida / coletada** (a NF de entrada x909 do cliente é ligada sozinha, ou o número é digitado) → **Recebida** (entrada do fiscal com saldo no armazém; automática, se o diagnóstico mostrar como reconhecer) → encerrada.
+
+O custo real (CTE) entra nos custos de frete (ZLC) com o tipo reversa. O frete cobrado vem do pedido da remessa, que já inclui a volta: a tela mostra **cobrado (ida + volta) × custo da ida + custo da volta**.
+
+Tabelas novas: cabeçalho da reversa e itens (equipamentos), criadas pelo compatibilizador, como a ZLC/ZLH.
+
 ## Como o retorno de locação é lançado (usuário, 24/11/2026)
 
 - O Protheus começou a operar no **início de 2026**. As locações anteriores foram feitas no **ERP antigo**.
