@@ -412,7 +412,8 @@ html, body { margin: 0; background: var(--bg); }
 .rx .pill.mat { background: var(--accent-soft); color: var(--accent); }
 /* informacao faltando no pedido (23/11/2026) */
 .rx .pill.falta { background: #fff2cc; color: #5a4300; border-color: #e0c060; }
-.rx .pill.etapa { background: var(--surface); color: var(--fg); border: 1px solid var(--line); box-shadow: inset 4px 0 0 var(--cor); padding-left: 10px; }
+/* selo da etapa: preenchido com a cor do quadro (24/11/2026, pedido do usuario); texto escuro le bem nas 5 cores */
+.rx .pill.etapa { background: var(--cor); color: #16202a; border: 1px solid rgba(0, 0, 0, 0.12); }
 
 /* Gaveta: formulario de logistica */
 .rx .gaveta { width: min(980px, 100%); }
@@ -554,7 +555,9 @@ html, body { margin: 0; background: var(--bg); }
 .rx .cform-tit { font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); font-weight: 800; margin-bottom: 8px; }
 .rx .cform-grade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
 .rx .cform-grade .inteiro { grid-column: 1 / -1; }
-.rx .cform-grade .check-sem-cte { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12.5px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg); cursor: pointer; }
+/* caixa "Sem CTE" (24/11/2026): fora da regra de largura total dos campos da gaveta */
+.rx .grupo-f .campo label.check-sem-cte { display: inline-flex; align-items: center; gap: 6px; width: fit-content; margin-top: 6px; font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg); cursor: pointer; }
+.rx .grupo-f .campo label.check-sem-cte input { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); flex: none; cursor: pointer; }
 @media (max-width: 760px) { .rx .cform-grade { grid-template-columns: minmax(0, 1fr); } }
 .rx #lg-xlsx { display: flex; flex-direction: column; gap: 12px; }
 .rx .xl-grupo { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
