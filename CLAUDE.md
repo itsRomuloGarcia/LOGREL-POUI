@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`, `postVsLogEnvio`), versão `LG_VERSAO` = `2026-11-25a` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`, `postVsLogEnvio`), versão `LG_VERSAO` = `2026-11-25b` | sim |
 | Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
@@ -339,8 +339,15 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - Planilha: `envios_` com `junto`, aba Envios com as NFs juntas na linha do 1º.
   - Com a regra, na homologação: **20 em Entregues e 1 em Faturados** (000446, NFs de 13/02 e 20/02, parcial de verdade).
   - Testado com a API falsa (pedido com a 2ª NF do mesmo dia): fica em Entregues sem pendência; separar grava o envio completo. Sem erro de JavaScript.
+- **25/11/2026 (3ª), pedido do usuário: `C5_TPFRETE` (tipo do frete) no bloco Dados do pedido** (API `2026-11-25b` + `logrel.app` + planilha).
+  - Opções informadas pelo usuário: C CIF, F FOB, T por conta de terceiros, R por conta do remetente, D por conta do destinatário, S sem frete. A tela usa o `X3_CBOX` (`opcoes.tipoFrete`); a lista do usuário é a reserva (`TPFRETE_PADRAO`).
+  - Grupo **COM** (só antes da NF, como transportadora, volume, espécie e pesos), porque sai na NF-e. Na API: `MapaCampos` tipo B, `ColOpc`, `TituloCampo` e a mensagem `PEDIDO_FATURADO`.
+  - Tela: `CAMPO.tipoFrete`, `COMERCIAIS`, `TipoOp`. O `combo` ganhou o parâmetro `extra` (desliga com NF). Com API anterior a `2026-11-25b`, o campo fica desligado.
+  - Lista, XLSX e planilha ganharam a coluna "Tipo do frete".
+  - Testado com a API falsa: o campo fica em Dados do pedido com as 6 opções; editável sem NF, com o PUT `{"tipoFrete":"F"}`; travado com NF.
 
 ## Pendências
+- **25/11/2026 (3ª):** compilar `RESTLOGREL.tlpp` `2026-11-25b` e o `logrel.app` (homologação e depois produção) e colar o `planilha/Codigo.gs` novo. Conferir se o `X3_CBOX` do `C5_TPFRETE` traz as 6 opções.
 - **25/11/2026, envios parciais:**
   1. Homologação: compilar `LOGRELUPD.prw`.
   2. Rodar o `U_LOGRELUPD`, opção **Tabelas**, fora do expediente. Ele cria a **ZLE** e o **`ZLC_NF`**.

@@ -73,6 +73,10 @@ const OPCOES_PADRAO = {
   motivoRetorno: [["1", "Recusa"], ["2", "Endereço"], ["3", "Avaria"], ["4", "Outros"]],
   motivoFinal: [["E", "Extravio"], ["P", "Enviado em outro pedido"], ["O", "Outro motivo"]],
   reembolso: [["P", "Pendente"], ["S", "Reembolsado"], ["N", "Sem reembolso"]],
+  tipoFrete: [
+    ["C", "CIF"], ["F", "FOB"], ["T", "Por conta de terceiros"], ["R", "Por conta remetente"],
+    ["D", "Por conta destinatário"], ["S", "Sem frete"],
+  ],
   tipoPedido: [
     ["AST", "Assis. técnica"], ["COM", "Comodato"], ["LOC", "Locação"], ["REM", "Remessa"],
     ["TRC", "Troca"], ["VAV", "Venda avulsa"], ["VEN", "Venda"],
@@ -446,6 +450,7 @@ function colunasPedidos_(ctx) {
     ["Vendedor", "gen", (r) => r.p.vendedor],
     ["Cód. transportadora", "txt", (r) => r.p.transportadora],
     ["Transportadora", "gen", (r) => r.p.transportadoraNome],
+    ["Tipo do frete", "gen", (r) => txtOp_(ctx, "tipoFrete", r.p.tipoFrete || "")],
     ["Notas fiscais", "txt", (r) => (r.p.notas || []).join(", ")],
     ["Faturamento", "data", (r) => r.p.dataFaturamento],
     ["Saída programada", "data", (r) => r.p.previsaoSaida],

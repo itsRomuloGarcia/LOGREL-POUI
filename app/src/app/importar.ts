@@ -32,6 +32,7 @@ export const DESTINOS: [Destino, string][] = [
   ['especie', 'Espécie'],
   ['pesoLiquido', 'Peso líquido'],
   ['pesoBruto', 'Peso bruto'],
+  ['tipoFrete', 'Tipo do frete'],
   ['obsEntrega', 'Observações da entrega'],
   ['obsRetorno', 'Observação do retorno'],
 ];

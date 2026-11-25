@@ -151,6 +151,8 @@ export interface Pedido {
   pesoLiquido?: number;
   pesoBruto?: number;
   dataEnvio: string;
+  /** C5_TPFRETE: tipo do frete (C CIF, F FOB, T terceiros, R remetente, D destinatario, S sem frete); API >= 2026-11-25b */
+  tipoFrete?: string;
   dataPrevisao: string;
   dataEntrega: string;
   tipoMaterial: string;
@@ -212,7 +214,7 @@ export interface LogResposta {
   ate: string;
   /** Campos da SC5 que ainda nao existem no ambiente (vem vazios e nao editam) */
   camposFaltando: string[];
-  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; motivoRetorno?: Opcao[]; tipoCusto?: Opcao[]; situacaoCusto?: Opcao[]; motivoFinal?: Opcao[]; reembolso?: Opcao[] };
+  opcoes: { tipoMaterial: Opcao[]; indicador: Opcao[]; reentrega: Opcao[]; tipoPedido: Opcao[]; tipoFrete?: Opcao[]; motivoRetorno?: Opcao[]; tipoCusto?: Opcao[]; situacaoCusto?: Opcao[]; motivoFinal?: Opcao[]; reembolso?: Opcao[] };
   /** Tabela de custos de frete (ZLC) existe: o CTE sai da SC5 e vira lista de cobrancas */
   temCustos?: boolean;
   /** Tabela de historico (ZLH) existe */
@@ -252,6 +254,8 @@ export interface PedidoEdicao {
   especie?: string;
   pesoLiquido?: number;
   pesoBruto?: number;
+  /** C5_TPFRETE (so antes da NF) */
+  tipoFrete?: string;
   obsEntrega?: string;
   /** Observacao do retorno (grava uma linha na ZLH): so com a data do retorno (API >= 2026-11-23b) */
   obsRetorno?: string;

@@ -133,6 +133,11 @@
 //   outro); "outro motivo" exige a observacao; reembolso so no extravio; data
 //   do reembolso so com Reembolsado.
 //
+// TIPO DO FRETE (2026-11-25b, pedido do usuario): C5_TPFRETE ("tipoFrete",
+//   combo do SX3 em opcoes.tipoFrete: C CIF, F FOB, T terceiros, R remetente,
+//   D destinatario, S sem frete). Grupo COM: so antes da NF, como a
+//   transportadora, o volume, a especie e os pesos (sai na NF-e).
+//
 // ENVIOS PARCIAIS (2026-11-25a, pedido do usuario em 25/11/2026)
 //   Pedido faturado em partes: cada NF e um envio. O 1o envio (NF mais antiga,
 //   "nfPrincipal") continua nos campos da SC5 (C5_ZDTENV, C5_ZDTPREV...). Os
@@ -157,7 +162,7 @@
 
 Namespace Videosoft.Logistica.Pedidos
 
-#define LG_VERSAO     "2026-11-25a"
+#define LG_VERSAO     "2026-11-25b"
 // Combos da finalizacao sem entrega (gravados na ZLH, nao no SX3)
 #define FIN_MOTIVOS   "E=Extravio;P=Enviado em outro pedido;O=Outro motivo"
 #define FIN_REEMB     "P=Pendente;S=Reembolsado;N=Sem reembolso"
@@ -233,6 +238,7 @@ Static Function LerPedidos()
       jOpc["indicador"]    := OpcoesCombo("C5_ZINDICA")
       jOpc["reentrega"]    := OpcoesCombo("C5_ZREENTR")
       jOpc["tipoPedido"]   := OpcoesCombo("C5_ZTPPEDI")
+      jOpc["tipoFrete"]    := OpcoesCombo("C5_TPFRETE")
       jOpc["motivoRetorno"]:= OpcoesCombo("C5_ZMOTRET")
       jOpc["motivoFinal"]  := OpcoesBox(FIN_MOTIVOS)
       jOpc["reembolso"]    := OpcoesBox(FIN_REEMB)
@@ -648,7 +654,7 @@ Static Function GravaPedido()
          EndIf
       EndIf
       If lComercial .and. TemNota(cPedido)
-         jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, volume, especie e pesos nao podem mais ser alterados aqui.")
+         jRet := BuildErro(409, "PEDIDO_FATURADO", "Pedido " + AllTrim(cPedido) + " ja tem nota: transportadora, tipo do frete, volume, especie e pesos nao podem mais ser alterados aqui.")
          lRespondido := .T.
          Break
       EndIf
@@ -863,6 +869,7 @@ Static Function MapaCampos()
    aAdd(aMapa, {"especie",           "C5_ESPECI1", "C", "COM"})
    aAdd(aMapa, {"pesoLiquido",       "C5_PESOL",   "N", "COM"})
    aAdd(aMapa, {"pesoBruto",         "C5_PBRUTO",  "N", "COM"})
+   aAdd(aMapa, {"tipoFrete",         "C5_TPFRETE", "B", "COM"})
    // frete destacado (C5_FRETE) e nao destacado (C5_ZFRETE): so consulta
    // desde 2026-11-15a (pedido do usuario); o GET continua mandando
 Return aMapa
@@ -891,6 +898,7 @@ Static Function TituloCampo(cCampo)
       {"C5_ESPECI1", "Especie"}, ;
       {"C5_PESOL", "Peso liquido"}, ;
       {"C5_PBRUTO", "Peso bruto"}, ;
+      {"C5_TPFRETE", "Tipo do frete"}, ;
       {"ZLC_TIPO", "Tipo da cobranca"}, ;
       {"ZLC_CTE", "CTE / documento"}, ;
       {"ZLC_DATA", "Data da cobranca"}, ;
@@ -1050,6 +1058,7 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
    cQuery += "       " + ColOpc(cExist, "C5_ESPECI1", "ESPECIE", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_PESOL", "PESOL", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_PBRUTO", "PBRUTO", @aFalta) + ", "
+   cQuery += "       " + ColOpc(cExist, "C5_TPFRETE", "TPFRETE", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTENV", "DTENV", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTPREV", "DTPREV", @aFalta) + ", "
    cQuery += "       " + ColOpc(cExist, "C5_ZDTENTR", "DTENTR", @aFalta) + ", "
@@ -1180,6 +1189,7 @@ Static Function ConsultaPedidos(dDe, dAte, aLista, aFalta, cEtapa, cAlAberto)
          jPed["especie"]           := TxtOut(cValToChar((cAlias)->ESPECIE))
          jPed["pesoLiquido"]       := NNum((cAlias)->PESOL)
          jPed["pesoBruto"]         := NNum((cAlias)->PBRUTO)
+         jPed["tipoFrete"]         := AllTrim(SStr((cAlias)->TPFRETE))
          jPed["dataEnvio"]         := IsoOut((cAlias)->DTENV)
          jPed["dataPrevisao"]      := IsoOut((cAlias)->DTPREV)
          jPed["dataEntrega"]       := IsoOut((cAlias)->DTENTR)

@@ -106,6 +106,8 @@ const ROTULO_CUSTO: Record<string, string> = {
   ZLC_VLRESP: 'Valor esperado',
   ZLC_OBS: 'Observação',
 };
+/** C5_TPFRETE informado pelo usuario em 25/11/2026 (usado so se o SX3 nao mandar o combo) */
+const TPFRETE_PADRAO: Opcao[] = [['C', 'CIF'], ['F', 'FOB'], ['T', 'Por conta de terceiros'], ['R', 'Por conta remetente'], ['D', 'Por conta destinatário'], ['S', 'Sem frete']];
 const TIPOPED_PADRAO: Opcao[] = [['AST', 'Assis. técnica'], ['COM', 'Comodato'], ['LOC', 'Locação'], ['REM', 'Remessa'], ['TRC', 'Troca'], ['VAV', 'Venda avulsa'], ['VEN', 'Venda']];
 
 /** Chave do corpo do PUT -> campo da SC5 (para desligar o que ainda nao existe) */
@@ -132,6 +134,7 @@ const CAMPO: Record<keyof PedidoEdicao, string> = {
   especie: 'C5_ESPECI1',
   pesoLiquido: 'C5_PESOL',
   pesoBruto: 'C5_PBRUTO',
+  tipoFrete: 'C5_TPFRETE',
   obsEntrega: 'C5_ZOBS',
   /** observacao do retorno: linha da ZLH (ZLH_OBS), nao campo da SC5 (23/11/2026) */
   obsRetorno: 'ZLH_OBS',
@@ -154,7 +157,7 @@ const REEMBOLSO: (keyof PedidoEdicao)[] = ['reembolso', 'valorReembolso', 'dataR
 const REENTREGA: (keyof PedidoEdicao)[] = ['cteReentrega', 'valorCteReentrega', 'dataNovaEntrega'];
 /** Dados do pedido que vao para a NF-e: so editam antes da nota (frete destacado e
  *  nao destacado sao so consulta desde 15/11/2026, pedido do usuario) */
-const COMERCIAIS: (keyof PedidoEdicao)[] = ['transportadora', 'volume', 'especie', 'pesoLiquido', 'pesoBruto'];
+const COMERCIAIS: (keyof PedidoEdicao)[] = ['transportadora', 'tipoFrete', 'volume', 'especie', 'pesoLiquido', 'pesoBruto'];
 /** Tem que estar preenchidos antes da emissao da NF-e (pedido do usuario, 15/11/2026) */
 const PARA_NFE: (keyof PedidoEdicao)[] = ['especie', 'pesoLiquido', 'pesoBruto'];
 /** Peso com ate 4 casas (C5_PESOL/C5_PBRUTO), sem zeros a mais */
@@ -224,7 +227,7 @@ const ROTULO: Record<string, string> = {
   obsFinal: 'Observação da finalização',
   obsIndicador: 'O que aconteceu (indicador Outros)',
 };
-type TipoOp = 'tipoMaterial' | 'indicador' | 'tipoPedido' | 'motivoRetorno' | 'motivoFinal' | 'reembolso';
+type TipoOp = 'tipoMaterial' | 'indicador' | 'tipoPedido' | 'tipoFrete' | 'motivoRetorno' | 'motivoFinal' | 'reembolso';
 /** Data que encerra o pedido na coluna Retornados e finalizados */
 const dataFim = (r: Reg) => (r.et === 'fin' ? r.p.dataFinal || '' : r.p.dataRetorno || '');
 
@@ -657,6 +660,8 @@ export class Painel {
     if (!r.versao || r.versao < '2026-11-15b') this.faltando.add(CAMPO.obsEntrega);
     // API anterior a 2026-11-23b: sem a observacao do retorno (ZLH_OBS)
     if (!r.versao || r.versao < '2026-11-23b') this.faltando.add(CAMPO.obsRetorno);
+    // API anterior a 2026-11-25b: sem o tipo do frete (C5_TPFRETE)
+    if (!r.versao || r.versao < '2026-11-25b') this.faltando.add(CAMPO.tipoFrete);
     // Com a tabela de custos, o CTE da SC5 nao e mais usado: nao avisa se faltar
     if (r.temCustos) ['C5_ZCTE', 'C5_ZVLRCTE', 'C5_ZCTEREE', 'C5_ZVCTERE'].forEach((c) => this.faltando.delete(c));
     this.regs = (r.pedidos || []).map((p) => this.montar(p));
@@ -924,7 +929,7 @@ export class Painel {
   private op(k: TipoOp): Opcao[] {
     const v = this.resp?.opcoes?.[k] || [];
     if (v.length) return v;
-    const padrao: Record<TipoOp, Opcao[]> = { tipoMaterial: TPMAT_PADRAO, indicador: INDICA_PADRAO, motivoRetorno: MOTRET_PADRAO, tipoPedido: TIPOPED_PADRAO, motivoFinal: MOTFIN_PADRAO, reembolso: REEMB_PADRAO };
+    const padrao: Record<TipoOp, Opcao[]> = { tipoMaterial: TPMAT_PADRAO, indicador: INDICA_PADRAO, motivoRetorno: MOTRET_PADRAO, tipoPedido: TIPOPED_PADRAO, tipoFrete: TPFRETE_PADRAO, motivoFinal: MOTFIN_PADRAO, reembolso: REEMB_PADRAO };
     return padrao[k];
   }
   private txtOp(k: TipoOp, cod: string): string {
@@ -1524,6 +1529,7 @@ export class Painel {
       { k: 'nf', t: 'NF', v: (_, i) => i.nota },
       { k: 'dfat', t: 'Faturamento', v: (_, i) => i.dataFat, f: d },
       { k: 'transp', t: 'Transportadora', v: (r) => (r.p.transportadora ? `${r.p.transportadora} - ${r.p.transportadoraNome}` : '') },
+      { k: 'tpfrete', t: 'Tipo do frete', v: (r) => this.txtOp('tipoFrete', r.p.tipoFrete || ''), tit: 'C5_TPFRETE' },
       { k: 'frete', t: 'Frete destacado', v: (r) => r.p.frete, f: m, dir: true, tit: 'C5_FRETE (do pedido, repete em cada item)' },
       { k: 'vol', t: 'Volume', v: (r) => r.p.volume, f: (v) => (v ? n0(Number(v)) : ''), dir: true },
       { k: 'esp', t: 'Espécie', v: (r) => r.p.especie || '', tit: 'C5_ESPECI1 (do pedido, repete em cada item)' },
@@ -1894,8 +1900,8 @@ export class Painel {
     // Frete: so consulta (sem data-f: nao entra no formulario nem no PUT)
     const fixo = (rot: string, campo: string, v: string) =>
       `<div class="campo"><label>${rot}</label><input type="text" class="so-leitura" value="${esc(v)}" readonly tabindex="-1" title="${campo}: só consulta, não é alterado aqui"></div>`;
-    const combo = (k: keyof PedidoEdicao, rot: string, ops: Opcao[], v: string) =>
-      `<div class="campo"><label for="f-${k}">${rot}</label><select id="f-${k}" data-f="${k}" ${dis(k)} ${tit(k)}><option value="">(não informado)</option>${ops.map(([c, t]) => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}>${esc(c)} - ${esc(t)}</option>`).join('')}${v && !ops.some(([c]) => c === v) ? `<option value="${esc(v)}" selected>${esc(v)}</option>` : ''}</select></div>`;
+    const combo = (k: keyof PedidoEdicao, rot: string, ops: Opcao[], v: string, extra = false) =>
+      `<div class="campo"><label for="f-${k}">${rot}</label><select id="f-${k}" data-f="${k}" ${dis(k, extra)} ${tit(k)}><option value="">(não informado)</option>${ops.map(([c, t]) => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}>${esc(c)} - ${esc(t)}</option>`).join('')}${v && !ops.some(([c]) => c === v) ? `<option value="${esc(v)}" selected>${esc(v)}</option>` : ''}</select></div>`;
     const transps = this.resp?.transportadoras || [];
     const reent = p.reentrega === 'SIM';
 
@@ -1947,9 +1953,10 @@ export class Painel {
           ${this.barraNotas(p)}
           <form class="form-log" id="lg-form" autocomplete="off">
             <fieldset class="grupo-f"><legend>Dados do pedido</legend>
-              ${faturado ? '<p class="nota inteiro">Pedido com nota fiscal: transportadora, volume, espécie e pesos já saíram na NF e não são alterados aqui.</p>' : '<p class="nota inteiro">Espécie, peso líquido e peso bruto têm que estar preenchidos antes da emissão da NF-e.</p>'}
+              ${faturado ? '<p class="nota inteiro">Pedido com nota fiscal: transportadora, tipo do frete, volume, espécie e pesos já saíram na NF e não são alterados aqui.</p>' : '<p class="nota inteiro">Espécie, peso líquido e peso bruto têm que estar preenchidos antes da emissão da NF-e.</p>'}
               <div class="campo inteiro"><label for="f-transportadora">Transportadora</label><input id="f-transportadora" list="lg-transps" data-f="transportadora" value="${esc(p.transportadora ? `${p.transportadora} - ${p.transportadoraNome}` : '')}" placeholder="Código ou nome" ${dis('transportadora', faturado)}>
                 <datalist id="lg-transps">${transps.map(([c, n]) => `<option value="${esc(c)} - ${esc(n)}"></option>`).join('')}</datalist></div>
+              ${combo('tipoFrete', 'Tipo do frete', this.op('tipoFrete'), p.tipoFrete || '', faturado)}
               ${num('volume', 'Volume', p.volume, faturado)}
               ${texto('especie', 'Espécie', p.especie || '', faturado)}
               ${num('pesoLiquido', 'Peso líquido', p.pesoLiquido || 0, faturado)}
@@ -2135,6 +2142,7 @@ export class Painel {
         ['Vendedor', 'txt', (r) => r.p.vendedor],
         ['Cód. transportadora', 'txt', (r) => r.p.transportadora],
         ['Transportadora', 'txt', (r) => r.p.transportadoraNome],
+        ['Tipo do frete', 'txt', (r) => this.txtOp('tipoFrete', r.p.tipoFrete || '')],
         ['Notas fiscais', 'txt', (r) => (r.p.notas || []).join(', ')],
         ['Faturamento', 'data', (r) => r.p.dataFaturamento],
         ['Saída programada', 'data', (r) => r.p.previsaoSaida],
@@ -2742,6 +2750,7 @@ export class Painel {
       especie: p.especie || '',
       pesoLiquido: p.pesoLiquido || 0,
       pesoBruto: p.pesoBruto || 0,
+      tipoFrete: p.tipoFrete || '',
       obsEntrega: (p.obsEntrega || '').replace(/\r\n?/g, '\n').trim(),
       obsRetorno: (p.obsRetorno || '').replace(/\r\n?/g, '\n').trim(),
       finalizado: p.finalizado === 'S' ? 'S' : '',

@@ -146,6 +146,7 @@ Na importação, a célula vazia não altera nada; há uma opção para que ela 
 | `C5_ZOBS` | Observações da entrega (texto livre; caracter ou memo) | sim |
 | `C5_MENNOTA` | Mensagem para a nota (padrão do Protheus) | não |
 | `C5_TRANSP`, `C5_VOLUME1`, `C5_ESPECI1`, `C5_PESOL`, `C5_PBRUTO` | Transportadora, volume, espécie, peso líquido, peso bruto | só antes da NF |
+| `C5_TPFRETE` | Tipo do frete (combo do SX3: C CIF, F FOB, T terceiros, R remetente, D destinatário, S sem frete), no bloco Dados do pedido, desde 25/11/2026 | só antes da NF |
 | `C5_FRETE`, `C5_ZFRETE` | Frete destacado, frete não destacado | só consulta (desde 15/11/2026) |
 | `C5_ZTPPEDI` | Tipo de pedido | não |
 | `Z01_SERIE` (tabela Z01) | Números de série do item, com a NF (`Z01_NFEDO`) | não |
