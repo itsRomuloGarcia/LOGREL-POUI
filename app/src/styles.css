@@ -557,6 +557,10 @@ html, body { margin: 0; background: var(--bg); }
 .rx .cform-grade .inteiro { grid-column: 1 / -1; }
 /* caixa "Sem CTE" (24/11/2026): fora da regra de largura total dos campos da gaveta */
 .rx .grupo-f .campo label.check-sem-cte { display: inline-flex; align-items: center; gap: 6px; width: fit-content; margin-top: 6px; font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg); cursor: pointer; }
+/* envios parciais (25/11/2026): um bloco por NF depois da 1a */
+.rx .grupo-envio { border-left: 4px solid var(--accent); }
+.rx .grupo-envio .env-cob { margin: 0; font-size: 13px; }
+.rx .grupo-envio .acoes-env { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
 .rx .grupo-f .campo label.check-sem-cte input { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); flex: none; cursor: pointer; }
 /* caixa "Pedido finalizado sem data de entrega" (24/11/2026), mesma regra da "Sem CTE" */
 .rx .grupo-f .campo label.check-fin { display: inline-flex; align-items: center; gap: 8px; width: fit-content; font-size: 14px; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--fg); cursor: pointer; }

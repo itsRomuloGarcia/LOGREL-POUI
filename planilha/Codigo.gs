@@ -23,6 +23,8 @@ const ROTA = "/api/v1/vs-financial-data/logistica/pedidos";
 const ABA_PED = "Pedidos";
 const ABA_ITENS = "Itens";
 const ABA_CUS = "Custos de frete";
+// Envios parciais (25/11/2026): uma linha por envio (NF)
+const ABA_ENV = "Envios";
 const ABA_RES = "Resumo";
 const ABA_INFO = "Atualizacao";
 const GATILHO_MINUTOS = 15; // 1, 5, 10, 15 ou 30
@@ -103,6 +105,7 @@ function atualizar() {
 
     const cont = gravarPedidos_(regs, ctx);
     gravarItens_(regs);
+    const nEnv = gravarEnvios_(regs, ctx);
     let nCus = 0;
     if (ctx.temCustos) nCus = gravarCustos_(regs, ctx);
     let obs = "";
@@ -118,6 +121,7 @@ function atualizar() {
         " pedidos " +
         resumoContagem_(cont) +
         (ctx.temCustos ? ", " + nCus + " cobrancas de frete" : " (sem a tabela de custos ZLC)") +
+        ", " + nEnv + " envios" +
         " | API " +
         resp.versao +
         " | com NF de " +
@@ -201,12 +205,28 @@ function montar_(p, ctx) {
   }
   const cus = ctx.temCustos ? p.custos || [] : null;
   const abertos = cus ? cus.filter((c) => EM_ABERTO.indexOf(c.situacao) >= 0) : [];
+  // envios parciais (25/11/2026): etapa, prazo e entrega do pedido saem dos envios (NFs)
+  const envs = envios_(p, ctx);
+  let etM = et;
+  let prazoM = prazo;
+  let atrasoM = atraso;
+  let entFinalM = entFinal || "";
+  if (envs.length) {
+    const todos = envs.every((e) => e.et === "ent");
+    etM = p.dataRetorno ? "ret" : todos ? "ent" : p.finalizado === "S" ? "fin" : envs.some((e) => e.et === "env") ? "env" : "fat";
+    entFinalM = todos ? envs.map((e) => e.entFinal).sort().slice(-1)[0] || "" : "";
+    const conta = etM === "env" ? envs.filter((e) => e.et === "env") : etM === "ent" ? envs : [];
+    const pior = conta.slice().sort((a, b) => RANK_PRAZO[b.prazo] - RANK_PRAZO[a.prazo] || (b.atraso === null ? -999 : b.atraso) - (a.atraso === null ? -999 : a.atraso))[0];
+    prazoM = pior ? pior.prazo : "";
+    atrasoM = pior ? pior.atraso : null;
+  }
   return {
     p: p,
-    et: et,
-    entFinal: entFinal || "",
-    prazo: prazo,
-    atraso: atraso,
+    et: etM,
+    entFinal: entFinalM,
+    prazo: prazoM,
+    atraso: atrasoM,
+    envs: envs,
     cobrado: (p.frete || 0) + (p.freteNaoDestacado || 0),
     custo: cus
       ? cus.reduce((s, c) => s + (c.valor || 0), 0)
@@ -216,7 +236,7 @@ function montar_(p, ctx) {
       .filter((c) => c.valorEsperado > 0)
       .reduce((s, c) => s + (c.valor - c.valorEsperado), 0),
     ctes: cus ? cus.map((c) => c.cte).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean),
-    pend: pendencias_(p, et, prazo, ctx),
+    pend: pendencias_(p, etM, prazoM, ctx, envs),
     qtd: itens.reduce((s, i) => s + (i.quantidade || 0), 0),
     valor: itens.reduce((s, i) => s + (i.valor || 0), 0),
   };
@@ -240,7 +260,52 @@ function indOutros_(ctx, cod) {
 function reembolsoPendente_(p) {
   return p.finalizado === "S" && p.motivoFinal === "E" && p.reembolso !== "S" && p.reembolso !== "N";
 }
-function pendencias_(p, et, prazo, ctx) {
+// Gravidade do prazo: o pior envio da a situacao do pedido faturado em partes
+const RANK_PRAZO = { atrasado: 3, vence: 2, semprev: 1, noprazo: 0, "": -1 };
+
+// Envios do pedido faturado em partes (uma NF por envio), igual ao envios() da
+// tela: o 1o (NF mais antiga) usa os campos da SC5; os outros vem da ZLE. [] = uma NF so
+function envios_(p, ctx) {
+  const outros = p.envios || [];
+  if (!outros.length) return [];
+  const itens = p.itens || [];
+  const nfP = p.nfPrincipal || "";
+  const fatDe = (nf) => itens.filter((i) => i.nota === nf && i.dataFat).map((i) => i.dataFat).sort()[0] || "";
+  const qtdDe = (nf) => itens.filter((i) => i.nota === nf).reduce((s, i) => s + (i.quantidade || 0), 0);
+  const cus = p.custos || [];
+  const lista = [
+    envio_(0, nfP, fatDe(nfP), p.dataEnvio, p.dataPrevisao, p.reentrega === "SIM" ? p.dataNovaEntrega : p.dataEntrega, p.tipoMaterial, p.indicador, p.transportadora, cus.filter((c) => !c.nf || c.nf === nfP), qtdDe(nfP), ctx),
+  ];
+  outros.forEach((e, k) =>
+    lista.push(envio_(k + 1, e.nf, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf), ctx)),
+  );
+  return lista;
+}
+
+function envio_(idx, nf, dataFat, dataEnvio, dataPrevisao, entFinal, tipoMaterial, indicador, transportadora, custos, qtd, ctx) {
+  const et = entFinal ? "ent" : dataEnvio ? "env" : "fat";
+  let prazo = "";
+  let atraso = null;
+  const prev = dt_(dataPrevisao);
+  if (et !== "fat") {
+    if (!prev) prazo = "semprev";
+    else if (et === "ent") {
+      atraso = dias_(prev, dt_(entFinal));
+      prazo = atraso > 0 ? "atrasado" : "noprazo";
+    } else {
+      const falta = dias_(ctx.hoje, prev);
+      atraso = -falta;
+      prazo = falta < 0 ? "atrasado" : falta <= DIAS_VENCE ? "vence" : "noprazo";
+    }
+  }
+  return {
+    idx: idx, nf: nf, dataFat: dataFat || "", dataEnvio: dataEnvio || "", dataPrevisao: dataPrevisao || "",
+    entFinal: entFinal || "", tipoMaterial: tipoMaterial || "", indicador: indicador || "",
+    transportadora: transportadora || "", custos: custos, qtd: qtd, et: et, prazo: prazo, atraso: atraso,
+  };
+}
+
+function pendencias_(p, et, prazo, ctx, envs) {
   const falta = ctx.resp.camposFaltando || [];
   const tem = (c) => falta.indexOf(c) < 0;
   const out = [];
@@ -266,7 +331,66 @@ function pendencias_(p, et, prazo, ctx) {
     if (tem("C5_ZPEDREN") && !p.pedidoReenvio) out.push("reenvio");
   }
   if (et === "fin" && reembolsoPendente_(p)) out.push("reembolso");
-  return out;
+  if (!envs || !envs.length) return out;
+  // envios parciais (25/11/2026): o que depende do envio e conferido em cada NF
+  const porEnvio = [];
+  envs.forEach((e) => {
+    if (e.et === "fat") {
+      if (e.dataFat && dias_(dt_(e.dataFat), ctx.hoje) > DIAS_FAT_PARADO) porEnvio.push("envio");
+      return;
+    }
+    if (!e.dataPrevisao) porEnvio.push("previsao");
+    if (e.et === "env" && e.prazo === "atrasado") porEnvio.push("entrega");
+    if (ctx.temCustos && !e.custos.length) porEnvio.push("cte");
+    if (!e.tipoMaterial) porEnvio.push("tpmat");
+    if (e.prazo === "atrasado" && !e.indicador) porEnvio.push("indicador");
+  });
+  const doEnvio = ["envio", "previsao", "entrega", "cte", "tpmat", "indicador"];
+  const juntos = out.filter((k) => doEnvio.indexOf(k) < 0).concat(porEnvio);
+  return juntos.filter((k, i) => juntos.indexOf(k) === i);
+}
+
+// Algum envio do pedido saiu no dia (o 1o ou um parcial)
+function saiuNoDia_(r, diaIso) {
+  return r.p.dataEnvio === diaIso || (r.envs || []).some((e) => e.dataEnvio === diaIso);
+}
+
+// Aba Envios: uma linha por envio (NF). Pedido de uma NF = 1 linha (dados do
+// pedido); faturado em partes = 1 linha por NF, com os dados de cada envio
+function gravarEnvios_(regs, ctx) {
+  const col = [
+    ["Pedido", "txt"], ["Envio", "gen"], ["NF", "txt"], ["Faturamento", "data"], ["Cliente", "gen"], ["Transportadora", "gen"],
+    ["Data de envio", "data"], ["Previsão de entrega", "data"], ["Entrega", "data"], ["Situação da entrega", "gen"], ["Dias de atraso", "int"],
+    ["Tipo de material", "gen"], ["Indicador de atraso", "gen"], ["CTEs", "txt"], ["Custo de frete", "moeda"], ["Quantidade (un)", "int"],
+  ];
+  const transps = ctx.resp.transportadoras || [];
+  const nomeT = (k) => { const t2 = transps.filter((x) => x[0] === k)[0]; return t2 ? t2[1] : k; };
+  const cteTxt = (lista) => lista.map((c) => c.cte).filter(Boolean).join(" / ");
+  const linhas = [];
+  regs.forEach((r) => {
+    if (!(r.p.notas || []).length) return;
+    const cliente = r.p.fantasia || r.p.nome;
+    if (!r.envs.length) {
+      const v = [
+        r.p.pedido, "1º de 1", (r.p.notas || []).join(", "), r.p.dataFaturamento, cliente, r.p.transportadoraNome || r.p.transportadora,
+        r.p.dataEnvio, r.p.dataPrevisao, r.entFinal, PRAZOS[r.prazo].nome, r.prazo === "atrasado" && r.atraso !== null ? r.atraso : "",
+        txtOp_(ctx, "tipoMaterial", r.p.tipoMaterial), txtOp_(ctx, "indicador", r.p.indicador), r.ctes.join(" / "), r.custo ? r2_(r.custo) : "", r.qtd,
+      ];
+      linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
+      return;
+    }
+    r.envs.forEach((e) => {
+      const custo = e.custos.reduce((s, c) => s + (c.valor || 0), 0);
+      const v = [
+        r.p.pedido, (e.idx + 1) + "º de " + r.envs.length, e.nf, e.dataFat, cliente, nomeT(e.transportadora),
+        e.dataEnvio, e.dataPrevisao, e.entFinal, PRAZOS[e.prazo].nome, e.prazo === "atrasado" && e.atraso !== null ? e.atraso : "",
+        txtOp_(ctx, "tipoMaterial", e.tipoMaterial), txtOp_(ctx, "indicador", e.indicador), cteTxt(e.custos), custo ? r2_(custo) : "", e.qtd,
+      ];
+      linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
+    });
+  });
+  gravarTabela_(ABA_ENV, 2, col, linhas, []);
+  return linhas.length;
 }
 
 function txtOp_(ctx, k, cod) {
@@ -567,7 +691,7 @@ function gravarResumo_(regs, ctx) {
     ["Retornados aguardando reenvio", conta((r) => r.et === "ret" && !r.p.pedidoReenvio)],
     ["Extravios com reembolso pendente", conta((r) => r.et === "fin" && reembolsoPendente_(r.p))],
     ["Pedidos com informação faltando (coluna Informação faltando)", conta((r) => r.pend.length > 0)],
-    ["Saíram hoje", conta((r) => r.p.dataEnvio === hojeIso)],
+    ["Saíram hoje", conta((r) => saiuNoDia_(r, hojeIso))],
   ];
   if (ctx.temCustos) kpis.push(["Pedidos com cobrança de frete em divergência", conta((r) => r.nDiv > 0)]);
   let linha = 4;

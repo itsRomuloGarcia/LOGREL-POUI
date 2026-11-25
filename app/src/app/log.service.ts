@@ -29,6 +29,41 @@ export interface Custo {
   obs: string;
   usuario: string;
   alteradoEm: string;
+  /** NF do envio (ZLC_NF, API >= 2026-11-25a); vazio = envio principal */
+  nf?: string;
+}
+
+/** Envio de uma NF do pedido depois da 1a (tabela ZLE, API >= 2026-11-25a) */
+export interface EnvioNf {
+  nf: string;
+  serie: string;
+  /** emissao da NF */
+  dataFat: string;
+  /** transportadora da NF (F2_TRANSP) */
+  transportadoraNf: string;
+  /** ja tem linha na ZLE */
+  gravado: boolean;
+  dataEnvio: string;
+  dataPrevisao: string;
+  dataEntrega: string;
+  tipoMaterial: string;
+  indicador: string;
+  transportadora: string;
+  usuario: string;
+  alteradoEm: string;
+}
+
+/** Corpo do POST /logistica/envios (so os campos alterados) */
+export interface EnvioEdicao {
+  recno: number;
+  nf: string;
+  serie: string;
+  dataEnvio?: string;
+  dataPrevisao?: string;
+  dataEntrega?: string;
+  tipoMaterial?: string;
+  indicador?: string;
+  transportadora?: string;
 }
 
 /** Corpo do POST /logistica/custos */
@@ -44,6 +79,8 @@ export interface CustoEdicao {
   valorEsperado?: number;
   situacao?: string;
   obs?: string;
+  /** NF do envio (vazio = envio principal) */
+  nf?: string;
 }
 
 /** Linha do historico da logistica (tabela ZLH) */
@@ -161,6 +198,9 @@ export interface Pedido {
   itens: ItemPedido[];
   notas: string[];
   dataFaturamento: string;
+  /** Envios parciais (API >= 2026-11-25a): a NF do 1o envio (campos da SC5) e os envios das outras NFs */
+  nfPrincipal?: string;
+  envios?: EnvioNf[];
 }
 
 export type Opcao = [string, string];
@@ -177,6 +217,9 @@ export interface LogResposta {
   temCustos?: boolean;
   /** Tabela de historico (ZLH) existe */
   temHistorico?: boolean;
+  /** Tabela de envios parciais (ZLE) existe e a cobranca tem a NF do envio (ZLC_NF) */
+  temEnvios?: boolean;
+  temNfCusto?: boolean;
   tamanhos: Record<string, number>;
   transportadoras: Opcao[];
   total: number;
@@ -258,6 +301,11 @@ export class LogService {
   /** Inclui, altera ou exclui uma cobranca de frete; responde o pedido como o GET */
   salvarCusto(dados: CustoEdicao): Observable<Pedido> {
     return this.baseRest$.pipe(switchMap((b) => this.http.post<Pedido>(`${b}${LOGISTICA}/custos`, dados)));
+  }
+
+  /** Grava o envio de uma NF do pedido (ZLE); responde o pedido como o GET */
+  salvarEnvio(dados: EnvioEdicao): Observable<Pedido> {
+    return this.baseRest$.pipe(switchMap((b) => this.http.post<Pedido>(`${b}${LOGISTICA}/envios`, dados)));
   }
 
   historico(pedido: string): Observable<{ temHistorico: boolean; historico: HistLinha[] }> {

@@ -1,7 +1,7 @@
 import * as G from './graficos';
 import { autoMapa, baixar, celulaCsv, dataIso, Destino, DESTINOS, DESTINOS_IMP, lerArquivo, lerTabela, numBR, numPedido, opcaoDe, semValor, simNao } from './importar';
 import { AbaXlsx, baixar as baixarXlsx, gerarXlsx } from './xlsx';
-import { Custo, CustoEdicao, HistLinha, ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.service';
+import { Custo, CustoEdicao, EnvioEdicao, HistLinha, ItemPedido, LogResposta, Opcao, Pedido, PedidoEdicao } from './log.service';
 
 // Tela Logistica (pedidos de entrega): Quadros (previstos, faturados, enviados,
 // entregues), Lista completa (um item por linha, com exportacao) e Indicadores.
@@ -19,6 +19,8 @@ export interface Api {
   salvar(recno: number, d: PedidoEdicao, origem?: string): Promise<Pedido>;
   /** Cobranca de frete (ZLC): incluir, alterar, excluir. API >= 2026-11-19a */
   salvarCusto(d: CustoEdicao): Promise<Pedido>;
+  /** Envio de uma NF do pedido depois da 1a (ZLE). API >= 2026-11-25a */
+  salvarEnvio(d: EnvioEdicao): Promise<Pedido>;
   /** Historico da logistica do pedido (ZLH) */
   historico(pedido: string): Promise<HistLinha[]>;
   /** Pedidos pelo numero, sem filtro (importacao de pedido que nao veio na consulta) */
@@ -183,6 +185,28 @@ const PEND_TXT: Record<Pend, [string, string]> = {
   reembolso: ['Extravio com reembolso pendente', 'reembolso do extravio'],
 };
 const PEND_ORDEM = Object.keys(PEND_TXT) as Pend[];
+/** Gravidade do prazo (o pior envio da a situacao do pedido faturado em partes) */
+const RANK_PRAZO: Record<Prazo, number> = { atrasado: 3, vence: 2, semprev: 1, noprazo: 0, '': -1 };
+
+/** Um envio do pedido faturado em partes (uma NF por envio). idx 0 = 1o envio (SC5) */
+interface Env {
+  idx: number;
+  nf: string;
+  serie: string;
+  dataFat: string;
+  dataEnvio: string;
+  dataPrevisao: string;
+  /** entrega (no 1o envio, a nova data quando houve reentrega) */
+  entFinal: string;
+  tipoMaterial: string;
+  indicador: string;
+  transportadora: string;
+  custos: Custo[];
+  qtd: number;
+  et: 'fat' | 'env' | 'ent';
+  prazo: Prazo;
+  atraso: number | null;
+}
 /** Faturado sem envio: pendente depois de N dias com NF (igual ao card "Faturados parados") */
 const DIAS_FAT_PARADO = 2;
 const ROTULO: Record<string, string> = {
@@ -297,6 +321,8 @@ interface Reg {
   ctes: string[];
   /** Informacao que falta preencher (PEND_TXT) */
   pend: Pend[];
+  /** Envios parciais (25/11/2026): 1o envio (SC5) + um por NF seguinte; [] = pedido de uma NF so */
+  envs: Env[];
   qtd: number;
   valor: number;
   parcial: boolean;
@@ -419,6 +445,10 @@ export class Painel {
   private custoEdit: string | null = null;
   private custosAbertos = false;
   private salvandoCusto = false;
+  /** cobranca nova aberta por "+ Cobranca deste envio": NF ja escolhida */
+  private custoNf = '';
+  /** envio (indice em r.envs) sendo gravado */
+  private salvandoEnvio = -1;
   /** janela do Exportar XLSX (aberta) */
   private xl: { recorte: string; filtros: boolean; abas: Set<string> } | null = null;
   /** historico do pedido aberto (lido ao abrir o bloco) */
@@ -682,13 +712,29 @@ export class Painel {
     const cus = this.temCustos ? p.custos || [] : null;
     const abertos = cus ? cus.filter((c) => EM_ABERTO.includes(c.situacao)) : [];
     const ctes = cus ? cus.map((c) => (c.cte === SEM_CTE ? 'Sem CTE' : c.cte)).filter(Boolean) : [p.cte, p.cteReentrega].filter(Boolean);
-    const pend = this.pendencias(p, et, prazo);
+    // envios parciais: etapa, prazo e entrega do pedido saem dos envios (NFs)
+    const envs = this.envios(p);
+    let etM = et;
+    let prazoM = prazo;
+    let atrasoM = atraso;
+    let entFinalM = entFinal;
+    if (envs.length) {
+      const todos = envs.every((e) => e.et === 'ent');
+      etM = p.dataRetorno ? 'ret' : todos ? 'ent' : p.finalizado === 'S' ? 'fin' : envs.some((e) => e.et === 'env') ? 'env' : 'fat';
+      entFinalM = todos ? envs.map((e) => e.entFinal).sort().slice(-1)[0] || '' : '';
+      const conta = etM === 'env' ? envs.filter((e) => e.et === 'env') : etM === 'ent' ? envs : [];
+      const pior = conta.slice().sort((a, b) => RANK_PRAZO[b.prazo] - RANK_PRAZO[a.prazo] || (b.atraso ?? -999) - (a.atraso ?? -999))[0];
+      prazoM = pior ? pior.prazo : '';
+      atrasoM = pior ? pior.atraso : null;
+    }
+    const pend = this.pendencias(p, etM, prazoM, envs);
     return {
       p,
-      et,
-      entFinal,
-      prazo,
-      atraso,
+      et: etM,
+      entFinal: entFinalM,
+      prazo: prazoM,
+      atraso: atrasoM,
+      envs,
       cobrado: (p.frete || 0) + (p.freteNaoDestacado || 0),
       custo: cus ? cus.reduce((s, c) => s + (c.valor || 0), 0) : (p.valorCte || 0) + (p.valorCteReentrega || 0),
       nDiv: abertos.length,
@@ -708,7 +754,7 @@ export class Painel {
   /** O que falta preencher no pedido, pela etapa (pedido do usuario, 23/11/2026).
    *  Campo que nao existe no ambiente nao conta. Transportadora, volume, especie e
    *  pesos so nos Previstos: com NF eles ja sairam no documento e nao editam aqui. */
-  private pendencias(p: Pedido, et: Etapa, prazo: Prazo): Pend[] {
+  private pendencias(p: Pedido, et: Etapa, prazo: Prazo, envs: Env[] = []): Pend[] {
     const tem = (c: string) => !this.faltando.has(c);
     const out: Pend[] = [];
     if (et === 'prev') {
@@ -733,7 +779,106 @@ export class Painel {
       if (tem(CAMPO.pedidoReenvio) && !p.pedidoReenvio) out.push('reenvio');
     }
     if (et === 'fin' && this.reembolsoPendente(p)) out.push('reembolso');
-    return out;
+    if (!envs.length) return out;
+    // envios parciais (25/11/2026): o que depende do envio e conferido em cada NF
+    const porEnvio: Pend[] = [];
+    envs.forEach((e) => {
+      if (e.et === 'fat') {
+        if (e.dataFat && dias(dt(e.dataFat) as Date, this.hoje) > DIAS_FAT_PARADO) porEnvio.push('envio');
+        return;
+      }
+      if (!e.dataPrevisao) porEnvio.push('previsao');
+      if (e.et === 'env' && e.prazo === 'atrasado') porEnvio.push('entrega');
+      if (this.temCustos && !e.custos.length) porEnvio.push('cte');
+      if (!e.tipoMaterial) porEnvio.push('tpmat');
+      if (e.prazo === 'atrasado' && !e.indicador) porEnvio.push('indicador');
+    });
+    const doEnvio: Pend[] = ['envio', 'previsao', 'entrega', 'cte', 'tpmat', 'indicador'];
+    return [...new Set([...out.filter((k) => !doEnvio.includes(k)), ...porEnvio])];
+  }
+
+  /** Envios do pedido faturado em partes (uma NF por envio). O 1o envio (NF mais
+   *  antiga) usa os campos da SC5; os outros vem da ZLE. Pedido de uma NF so: [] */
+  private envios(p: Pedido): Env[] {
+    const outros = p.envios || [];
+    if (!outros.length) return [];
+    const itens = p.itens || [];
+    const nfP = p.nfPrincipal || '';
+    const fatDe = (nf: string) => itens.filter((i) => i.nota === nf && i.dataFat).map((i) => i.dataFat).sort()[0] || '';
+    const cus = p.custos || [];
+    const qtdDe = (nf: string) => itens.filter((i) => i.nota === nf).reduce((s, i) => s + (i.quantidade || 0), 0);
+    const principal = this.envio(0, nfP, '', fatDe(nfP), p.dataEnvio, p.dataPrevisao, p.reentrega === 'SIM' ? p.dataNovaEntrega : p.dataEntrega, p.tipoMaterial, p.indicador, p.transportadora, cus.filter((c) => !c.nf || c.nf === nfP), qtdDe(nfP));
+    return [
+      principal,
+      ...outros.map((e, k) =>
+        this.envio(k + 1, e.nf, e.serie, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf)),
+      ),
+    ];
+  }
+
+  private envio(idx: number, nf: string, serie: string, dataFat: string, dataEnvio: string, dataPrevisao: string, entFinal: string, tipoMaterial: string, indicador: string, transportadora: string, custos: Custo[], qtd: number): Env {
+    const et: 'fat' | 'env' | 'ent' = entFinal ? 'ent' : dataEnvio ? 'env' : 'fat';
+    let prazo: Prazo = '';
+    let atraso: number | null = null;
+    const prev = dt(dataPrevisao);
+    if (et !== 'fat') {
+      if (!prev) prazo = 'semprev';
+      else if (et === 'ent') {
+        atraso = dias(prev, dt(entFinal) as Date);
+        prazo = atraso > 0 ? 'atrasado' : 'noprazo';
+      } else {
+        const falta = dias(this.hoje, prev);
+        atraso = -falta;
+        prazo = falta < 0 ? 'atrasado' : falta <= DIAS_VENCE ? 'vence' : 'noprazo';
+      }
+    }
+    return { idx, nf, serie, dataFat, dataEnvio: dataEnvio || '', dataPrevisao: dataPrevisao || '', entFinal: entFinal || '', tipoMaterial: tipoMaterial || '', indicador: indicador || '', transportadora: transportadora || '', custos, qtd, et, prazo, atraso };
+  }
+
+  /** Algum envio do pedido saiu hoje (o 1o ou um parcial) */
+  private saiuHoje(r: Reg, hj: string): boolean {
+    return r.p.dataEnvio === hj || r.envs.some((e) => e.dataEnvio === hj);
+  }
+
+  /** Envio da NF do item (pedido faturado em partes); undefined = pedido de uma NF so */
+  private envioDoItem(r: Reg, i: ItemPedido): Env | undefined {
+    return r.envs.length && i.nota ? r.envs.find((e) => e.nf === i.nota) : undefined;
+  }
+
+  /** Um registro por envio (para indicadores e XLSX): pedido de uma NF fica como esta;
+   *  o faturado em partes vira um registro por NF, com as datas, a transportadora e
+   *  as cobrancas daquele envio (o frete cobrado no pedido fica no 1o envio) */
+  private porEnvio(regs: Reg[]): Reg[] {
+    const transps = this.resp?.transportadoras || [];
+    return regs.flatMap((r) => {
+      if (!r.envs.length) return [r];
+      return r.envs.map((e) => {
+        const prin = e.idx === 0;
+        const p2: Pedido = {
+          ...r.p,
+          envios: [],
+          nfPrincipal: e.nf,
+          dataEnvio: e.dataEnvio,
+          dataPrevisao: e.dataPrevisao,
+          dataEntrega: prin ? r.p.dataEntrega : e.entFinal,
+          reentrega: prin ? r.p.reentrega : 'NAO',
+          dataNovaEntrega: prin ? r.p.dataNovaEntrega : '',
+          dataRetorno: prin ? r.p.dataRetorno : '',
+          finalizado: prin ? r.p.finalizado : '',
+          transportadora: e.transportadora,
+          transportadoraNome: transps.find(([k]) => k === e.transportadora)?.[1] || (prin ? r.p.transportadoraNome : e.transportadora),
+          tipoMaterial: e.tipoMaterial,
+          indicador: e.indicador,
+          custos: e.custos,
+          frete: prin ? r.p.frete : 0,
+          freteNaoDestacado: prin ? r.p.freteNaoDestacado : 0,
+          itens: (r.p.itens || []).filter((i) => i.nota === e.nf),
+          notas: e.nf ? [e.nf] : [],
+          dataFaturamento: e.dataFat,
+        };
+        return this.montar(p2);
+      });
+    });
   }
 
   /** Indicador de atraso escolhido e a opcao "Outros" (pede a descricao) */
@@ -994,14 +1139,14 @@ export class Painel {
    *  usuario, 23/11/2026). [id, titulo, texto menor, filtro, critico se > 0] */
   private cardsQuadros(regs: Reg[]): { id: string; r: string; s: string; f: (r: Reg) => boolean; crit: boolean }[] {
     const hj = iso(this.hoje);
-    const hoje = regs.filter((r) => r.p.dataEnvio === hj);
+    const hoje = regs.filter((r) => this.saiuHoje(r, hj));
     const un = hoje.reduce((s, r) => s + r.qtd, 0);
     const tr = new Set(hoje.map((r) => r.p.transportadora || '-')).size;
     const div = this.temCustos ? regs.filter((r) => r.nDiv > 0) : [];
     const dif = div.reduce((s, r) => s + r.difDiv, 0);
     const out: { id: string; r: string; s: string; f: (r: Reg) => boolean; crit: boolean }[] = [
       { id: 'pend', r: 'Com informação faltando', s: 'transportadora, peso, datas, CTE…', f: (r) => r.pend.length > 0, crit: true },
-      { id: 'hoje', r: 'Saíram hoje', s: hoje.length ? `${n0(un)} un · ${n0(tr)} transportadora${tr === 1 ? '' : 's'}` : 'nenhum envio com a data de hoje', f: (r) => r.p.dataEnvio === hj, crit: false },
+      { id: 'hoje', r: 'Saíram hoje', s: hoje.length ? `${n0(un)} un · ${n0(tr)} transportadora${tr === 1 ? '' : 's'}` : 'nenhum envio com a data de hoje', f: (r) => this.saiuHoje(r, hj), crit: false },
       { id: 'atr', r: 'Em trânsito atrasados', s: 'passaram da previsão da transportadora', f: (r) => r.et === 'env' && r.prazo === 'atrasado', crit: true },
       { id: 'vence', r: 'Vencem em até 2 dias', s: 'em trânsito, perto da previsão', f: (r) => r.et === 'env' && r.prazo === 'vence', crit: false },
       { id: 'fatpar', r: 'Faturados parados', s: 'com NF há mais de 2 dias, sem envio', f: (r) => r.et === 'fat' && !!r.p.dataFaturamento && dias(dt(r.p.dataFaturamento) as Date, this.hoje) > DIAS_FAT_PARADO, crit: true },
@@ -1026,7 +1171,7 @@ export class Painel {
    *  dos Enviados. O pedido continua tambem no quadro da etapa dele. */
   private quadroHoje(regs: Reg[], hj: string): string {
     const lista = regs
-      .filter((r) => r.p.dataEnvio === hj)
+      .filter((r) => this.saiuHoje(r, hj))
       .sort((a, b) => this.transpNome(a).localeCompare(this.transpNome(b)) || a.p.pedido.localeCompare(b.p.pedido));
     const un = lista.reduce((s, r) => s + r.qtd, 0);
     const tr = new Set(lista.map((r) => r.p.transportadora || '-')).size;
@@ -1046,6 +1191,10 @@ export class Painel {
     if (r.prazo && r.prazo !== 'noprazo') pills.push(this.pillPrazo(r, true));
     if (p.reentrega === 'SIM') pills.push(`<span class="pill reent">Reentrega</span>`);
     if (r.parcial) pills.push(`<span class="pill semprev">NF parcial</span>`);
+    if (r.envs.length) {
+      const sairam = r.envs.filter((e) => e.dataEnvio).length;
+      pills.push(`<span class="pill mat" title="Pedido faturado em ${r.envs.length} NFs: ${r.envs.map((e) => `NF ${e.nf} ${e.et === 'ent' ? 'entregue' : e.et === 'env' ? 'em trânsito' : 'aguardando saída'}`).join('; ')}">${sairam} de ${r.envs.length} envios</span>`);
+    }
     if (r.et === 'ret' && !p.pedidoReenvio) pills.push(`<span class="pill atrasado">Aguardando reenvio</span>`);
     if (r.et === 'ret' && p.motivoRetorno) pills.push(`<span class="pill semprev">${esc(this.txtOp('motivoRetorno', p.motivoRetorno))}</span>`);
     if (r.et === 'fin') pills.push(...this.pillsFinal(p));
@@ -1367,10 +1516,11 @@ export class Painel {
       { k: 'obs', t: 'Observações da entrega', v: (r) => r.p.obsEntrega || '', tit: 'C5_ZOBS' },
       { k: 'pbru', t: 'Peso bruto', v: (r) => r.p.pesoBruto || 0, f: (v) => pesoTxt(Number(v)), dir: true, tit: 'C5_PBRUTO (do pedido, repete em cada item)' },
       { k: 'fnd', t: 'Frete não destacado', v: (r) => r.p.freteNaoDestacado, f: m, dir: true, tit: 'C5_ZFRETE (do pedido, repete em cada item)' },
-      { k: 'tpmat', t: 'Tipo de material', v: (r) => this.txtOp('tipoMaterial', r.p.tipoMaterial) },
-      { k: 'denv', t: 'Envio', v: (r) => r.p.dataEnvio, f: d },
-      { k: 'dprev', t: 'Previsão entrega', v: (r) => r.p.dataPrevisao, f: d },
-      { k: 'dent', t: 'Entrega', v: (r) => r.p.dataEntrega, f: d },
+      // pedido faturado em partes: o envio da NF do item (25/11/2026)
+      { k: 'tpmat', t: 'Tipo de material', v: (r, i) => this.txtOp('tipoMaterial', this.envioDoItem(r, i)?.tipoMaterial ?? r.p.tipoMaterial) },
+      { k: 'denv', t: 'Envio', v: (r, i) => this.envioDoItem(r, i)?.dataEnvio ?? r.p.dataEnvio, f: d },
+      { k: 'dprev', t: 'Previsão entrega', v: (r, i) => this.envioDoItem(r, i)?.dataPrevisao ?? r.p.dataPrevisao, f: d },
+      { k: 'dent', t: 'Entrega', v: (r, i) => { const e = this.envioDoItem(r, i); return e && e.idx > 0 ? e.entFinal : r.p.dataEntrega; }, f: d },
       ...(this.temCustos
         ? [
             { k: 'cte', t: 'CTEs', v: (r: Reg) => r.ctes.join(' / '), tit: 'Todos os CTEs/documentos das cobranças de frete do pedido' },
@@ -1477,7 +1627,8 @@ export class Painel {
 
   // ---------- Indicadores ----------
   private telaIndicadores(): string {
-    const regs = this.base();
+    // pedido faturado em partes conta cada envio (NF) separado (25/11/2026)
+    const regs = this.porEnvio(this.base());
     const enviados = regs.filter((r) => r.p.dataEnvio);
     const entregues = regs.filter((r) => r.et === 'ent');
     const noPrazo = entregues.filter((r) => r.prazo === 'noprazo');
@@ -1748,6 +1899,10 @@ export class Painel {
       ['Entrega', p.dataEntrega],
     ];
     if (reent) passos.push(['Nova entrega (reentrega)', p.dataNovaEntrega]);
+    r.envs.slice(1).forEach((e) => {
+      passos.push([`${e.idx + 1}º envio (NF ${e.nf})`, e.dataEnvio]);
+      passos.push([`Entrega do ${e.idx + 1}º envio`, e.entFinal]);
+    });
     if (p.dataRetorno) passos.push(['Retorno à empresa', p.dataRetorno]);
     if (p.finalizado === 'S') passos.push([`Finalizado sem entrega${p.motivoFinal ? ` (${this.txtOp('motivoFinal', p.motivoFinal)})` : ''}`, p.dataFinal || '']);
     if (p.finalizado === 'S' && p.dataReembolso) passos.push(['Reembolso do extravio', p.dataReembolso]);
@@ -1788,7 +1943,7 @@ export class Painel {
               ${fixo('Frete não destacado (R$)', 'C5_ZFRETE', numTxt(p.freteNaoDestacado) || '0,00')}
               ${p.freteNaoDestacadoTexto && numBR(p.freteNaoDestacadoTexto) !== p.freteNaoDestacado ? `<p class="nota inteiro">Frete não destacado gravado como texto: "${esc(p.freteNaoDestacadoTexto)}".</p>` : ''}
             </fieldset>
-            <fieldset class="grupo-f"><legend>Envio e entrega</legend>
+            <fieldset class="grupo-f"><legend>Envio e entrega${r.envs.length ? ` · 1º envio (NF ${esc(r.envs[0].nf)})` : ''}</legend>
               ${data('previsaoSaida', 'Saída programada (C5_FECENT)', p.previsaoSaida)}
               ${data('dataEnvio', 'Data de envio', p.dataEnvio)}
               ${data('dataPrevisao', 'Previsão de entrega (transportadora)', p.dataPrevisao, false, false)}
@@ -1798,6 +1953,7 @@ export class Painel {
               <div class="campo inteiro" id="lg-obsind" ${this.indOutros(p.indicador) ? '' : 'hidden'}><label for="f-obsIndicador">O que aconteceu? (indicador "Outros")</label><textarea id="f-obsIndicador" data-f="obsIndicador" rows="2" ${tam[CAMPO.obsIndicador] ? `maxlength="${tam[CAMPO.obsIndicador]}"` : ''} placeholder="Descreva o motivo do atraso" ${dis('obsIndicador')} ${tit('obsIndicador')}>${esc(p.obsIndicador || '')}</textarea></div>
               <div class="campo inteiro"><label for="f-obsEntrega">Observações da entrega</label><textarea id="f-obsEntrega" data-f="obsEntrega" rows="3" ${tam[CAMPO.obsEntrega] ? `maxlength="${tam[CAMPO.obsEntrega]}"` : ''} placeholder="Texto livre: horário de recebimento, contato, acesso…" ${dis('obsEntrega')} ${tit('obsEntrega')}>${esc(p.obsEntrega || '')}</textarea></div>
             </fieldset>
+            ${r.envs.length ? `<div id="lg-envios">${this.enviosHtml(r)}</div>` : ''}
             ${comCustos ? `<div id="lg-custos">${this.custosHtml(r)}</div>` : ''}
             ${comCustos ? '' : `<fieldset class="grupo-f"><legend>CTE da transportadora</legend>
               ${texto('cte', 'Número do CTE', p.cte)}
@@ -1889,7 +2045,7 @@ export class Painel {
     }
     const g = ler<{ recorte?: string; filtros?: boolean; abas?: string[] }>('xlsx', {});
     this.fecharModal();
-    this.xl ={ recorte: g.recorte || 'todos', filtros: g.filtros ?? true, abas: new Set(g.abas?.length ? g.abas : ['ped', 'itens', 'custos']) };
+    this.xl ={ recorte: g.recorte || 'todos', filtros: g.filtros ?? true, abas: new Set(g.abas?.length ? g.abas : ['ped', 'itens', 'envios', 'custos']) };
     this.desenharXlsx();
   }
 
@@ -1913,6 +2069,7 @@ export class Painel {
       ['ped', 'Pedidos: uma linha por pedido, com todos os dados de logística e frete'],
       ['itens', 'Itens: uma linha por item do pedido (produto, quantidade, NF, números de série)'],
     ];
+    abas.push(['envios', 'Envios: uma linha por envio (NF), com datas, transportadora e custo de cada um; o pedido faturado em partes tem uma linha por NF']);
     if (this.temCustos) abas.push(['custos', 'Custos de frete: uma linha por cobrança (CTE, reentregas, taxas)']);
     const sel = this.regsXlsx(x.recorte, x.filtros);
     const nItens = sel.reduce((s, r) => s + (r.p.itens || []).length, 0);
@@ -2054,6 +2211,27 @@ export class Painel {
         linhas,
       });
     }
+    if (x.abas.has('envios')) {
+      // um registro por envio (NF): pedido de uma NF = 1 linha; faturado em partes = 1 por NF
+      const linhas: (string | number)[][] = [];
+      sel.forEach((r) => {
+        if (!(r.p.notas || []).length) return;
+        const lista = this.porEnvio([r]);
+        lista.forEach((e, k) =>
+          linhas.push([r.p.pedido, `${k + 1}º de ${lista.length}`, (e.p.notas || []).join(', '), e.p.dataFaturamento, r.p.fantasia || r.p.nome, e.p.transportadoraNome || e.p.transportadora, e.p.dataEnvio, e.p.dataPrevisao, e.entFinal, ET[e.et].curto, PRAZO_TXT[e.prazo], e.prazo === 'atrasado' && e.atraso !== null ? e.atraso : '', this.txtOp('tipoMaterial', e.p.tipoMaterial), this.txtOp('indicador', e.p.indicador), e.ctes.join(' / '), e.custo ? Math.round(e.custo * 100) / 100 : '', e.qtd]),
+        );
+      });
+      abas.push({
+        nome: 'Envios',
+        tabela: 'Envios',
+        colunas: [
+          { t: 'Pedido' }, { t: 'Envio' }, { t: 'NF' }, { t: 'Faturamento', tipo: 'data' }, { t: 'Cliente' }, { t: 'Transportadora' },
+          { t: 'Data de envio', tipo: 'data' }, { t: 'Previsão de entrega', tipo: 'data' }, { t: 'Entrega', tipo: 'data' }, { t: 'Quadro' }, { t: 'Situação da entrega' },
+          { t: 'Dias de atraso', tipo: 'num' }, { t: 'Tipo de material' }, { t: 'Indicador de atraso' }, { t: 'CTEs' }, { t: 'Custo de frete', tipo: 'num' }, { t: 'Quantidade (un)', tipo: 'num' },
+        ],
+        linhas,
+      });
+    }
     if (!abas.length) return;
     try {
       const rec = x.recorte === 'todos' ? 'todos' : x.recorte;
@@ -2099,6 +2277,7 @@ export class Painel {
         const dif = EM_ABERTO.includes(c.situacao) && c.valorEsperado > 0 ? c.valor - c.valorEsperado : 0;
         return `<tr class="sem-clique${ed ? ' editando' : ''}">
           <td class="mono">${esc(c.item)}</td>
+          ${r.envs.length ? `<td class="mono">${esc(this.envioDaCobranca(r, c))}</td>` : ''}
           <td>${esc(this.txtCusto('tipoCusto', c.tipo))}</td>
           <td class="mono">${c.cte === SEM_CTE ? '<span class="pill semprev">Sem CTE</span>' : esc(c.cte) || '<span class="muted">–</span>'}</td>
           <td>${fmt(c.data) || '<span class="muted">–</span>'}</td>
@@ -2106,11 +2285,11 @@ export class Painel {
           <td class="dir num">${rs(c.valor)}${c.cte === SEM_CTE && !c.valor ? '<span class="cod-linha muted">sem cobrança</span>' : ''}${dif ? `<span class="cod-linha crit-txt">esperado ${rs(c.valorEsperado)} (${dif > 0 ? '+' : ''}${rs(dif)})</span>` : ''}</td>
           <td><span class="pill ${COR_SITCUSTO[c.situacao] || 'semprev'}">${esc(this.txtCusto('situacaoCusto', c.situacao))}</span></td>
           <td class="dir"><button type="button" class="btn-txt" data-acao="custo-editar" data-item="${esc(c.item)}" ${this.salvandoCusto ? 'disabled' : ''}>Editar</button></td>
-        </tr>${c.obs || c.usuario ? `<tr class="sem-clique sub"><td></td><td colspan="7">${c.obs ? `${esc(c.obs)} · ` : ''}<span class="muted">${esc(c.usuario)}${c.alteradoEm ? ` em ${fmt(c.alteradoEm.slice(0, 10))} ${esc(c.alteradoEm.slice(11, 16))}` : ''}</span></td></tr>` : ''}`;
+        </tr>${c.obs || c.usuario ? `<tr class="sem-clique sub"><td></td><td colspan="${r.envs.length ? 8 : 7}">${c.obs ? `${esc(c.obs)} · ` : ''}<span class="muted">${esc(c.usuario)}${c.alteradoEm ? ` em ${fmt(c.alteradoEm.slice(0, 10))} ${esc(c.alteradoEm.slice(11, 16))}` : ''}</span></td></tr>` : ''}`;
       })
       .join('');
     const tabela = lista.length
-      ? `<div class="tabela-wrap"><table class="custos"><thead><tr><th>Item</th><th>Tipo</th><th>CTE / doc.</th><th>Data</th><th>Transportadora</th><th class="dir">Valor</th><th>Situação</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`
+      ? `<div class="tabela-wrap"><table class="custos"><thead><tr><th>Item</th>${r.envs.length ? '<th>Envio</th>' : ''}<th>Tipo</th><th>CTE / doc.</th><th>Data</th><th>Transportadora</th><th class="dir">Valor</th><th>Situação</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`
       : '<p class="muted">Lance aqui o CTE do envio e cada cobrança extra: reentrega, armazenagem, devolução, outras taxas.</p>';
     const form = this.custoEdit !== null ? this.custoForm(r, lista.find((c) => c.item === this.custoEdit)) : `<p><button type="button" class="btn" data-acao="custo-novo" ${this.salvandoCusto ? 'disabled' : ''}>+ Adicionar cobrança</button></p>`;
     // grupo do formulario, sempre aberto (pedido do usuario, 19/11/2026): os
@@ -2126,7 +2305,17 @@ export class Painel {
     const lista = p.custos || [];
     // nova: Envio se ainda nao tem; Reentrega se o pedido teve reentrega; senao Outra taxa
     const tipoNovo = !lista.some((x) => x.tipo === 'E') ? 'E' : p.reentrega === 'SIM' && !lista.some((x) => x.tipo === 'R') ? 'R' : 'O';
-    const v = c || { item: '', tipo: tipoNovo, cte: '', data: iso(this.hoje), transportadora: p.transportadora, transportadoraNome: p.transportadoraNome, valor: 0, situacao: '', valorEsperado: 0, obs: '', usuario: '', alteradoEm: '' };
+    // cobranca nova de um envio parcial: transportadora daquele envio
+    const envNovo = !c && this.custoNf ? r.envs.find((e) => e.nf === this.custoNf) : undefined;
+    const v = c || { item: '', tipo: envNovo ? 'E' : tipoNovo, cte: '', data: iso(this.hoje), transportadora: envNovo ? envNovo.transportadora : p.transportadora, transportadoraNome: envNovo ? '' : p.transportadoraNome, valor: 0, situacao: '', valorEsperado: 0, obs: '', usuario: '', alteradoEm: '', nf: this.custoNf };
+    // envios parciais: a qual envio (NF) a cobranca pertence (ZLC_NF); vazio = 1o envio
+    const nfSel = c ? (c.nf && c.nf !== p.nfPrincipal ? c.nf : '') : this.custoNf;
+    const selEnvio =
+      r.envs.length && this.resp?.temNfCusto
+        ? `<div class="campo inteiro"><label for="cf-nf">Envio</label><select id="cf-nf" ${this.salvandoCusto ? 'disabled' : ''}>${r.envs
+            .map((e) => `<option value="${e.idx ? esc(e.nf) : ''}" ${(e.idx ? e.nf : '') === nfSel ? 'selected' : ''}>${e.idx + 1}º envio · NF ${esc(e.nf)}</option>`)
+            .join('')}</select></div>`
+        : '';
     const transps = this.resp?.transportadoras || [];
     const tr = v.transportadora ? `${v.transportadora} - ${transps.find(([k]) => k === v.transportadora)?.[1] || v.transportadoraNome || ''}` : '';
     const ops = (o: Opcao[], sel: string, vazio = '') => `${vazio ? `<option value="">${esc(vazio)}</option>` : ''}${o.map(([k, t]) => `<option value="${esc(k)}" ${k === sel ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
@@ -2135,6 +2324,7 @@ export class Painel {
     return `<div class="cform" id="lg-cform">
       <div class="cform-tit">${c ? `Editando a cobrança ${esc(c.item)}` : 'Nova cobrança'}</div>
       <div class="cform-grade">
+        ${selEnvio}
         <div class="campo"><label for="cf-tipo">Tipo</label><select id="cf-tipo" ${dis}>${ops(this.opCusto('tipoCusto'), v.tipo)}</select></div>
         <div class="campo"><label for="cf-cte">CTE / documento</label><input id="cf-cte" type="text" maxlength="20" value="${esc(semCte ? '' : v.cte)}" ${dis} ${semCte ? 'disabled' : ''}>
           <label class="check-sem-cte"><input type="checkbox" id="cf-semcte" ${semCte ? 'checked' : ''} ${dis}> Sem CTE</label></div>
@@ -2154,12 +2344,122 @@ export class Painel {
       </div></div>`;
   }
 
+  // ---------- Envios parciais (25/11/2026, pedido do usuario) ----------
+  /** "1o" ou "NF 000123" da cobranca (a qual envio ela pertence) */
+  private envioDaCobranca(r: Reg, c: Custo): string {
+    const e = r.envs.find((x) => x.idx > 0 && x.nf === c.nf);
+    return e ? `${e.idx + 1}º · NF ${e.nf}` : `1º · NF ${r.envs[0]?.nf || ''}`;
+  }
+
+  /** Bloco "Envios seguintes" da gaveta: um grupo por NF depois da 1a, que grava
+   *  na hora (POST /logistica/envios), sem fechar a gaveta. A 1a NF usa os campos
+   *  de "Envio e entrega" (SC5). CTE e frete: cobrancas com a NF do envio. */
+  private enviosHtml(r: Reg): string {
+    const resp = this.resp;
+    const sem = !resp?.temEnvios;
+    const transps = resp?.transportadoras || [];
+    const nomeT = (k: string) => (k ? `${k} - ${transps.find(([c]) => c === k)?.[1] || ''}` : '');
+    const ops = (o: Opcao[], sel: string) => `<option value="">(não informado)</option>${o.map(([c, t]) => `<option value="${esc(c)}" ${c === sel ? 'selected' : ''}>${esc(c)} - ${esc(t)}</option>`).join('')}${sel && !o.some(([c]) => c === sel) ? `<option value="${esc(sel)}" selected>${esc(sel)}</option>` : ''}`;
+    const blocos = r.envs
+      .filter((e) => e.idx > 0)
+      .map((e) => {
+        const k = e.idx;
+        const id = (c: string) => `ev${k}-${c}`;
+        const dis = sem || this.salvandoEnvio === k ? 'disabled' : '';
+        const data = (c: string, rot: string, v: string, hoje = true) =>
+          `<div class="campo"><label for="${id(c)}">${rot}</label><div class="com-hoje"><input id="${id(c)}" type="date" value="${esc(v)}" ${dis}>${hoje ? `<button type="button" class="btn-txt" data-acao="ev-hoje" data-alvo="${id(c)}" ${dis}>Hoje</button>` : ''}</div></div>`;
+        const cobs = e.custos.length
+          ? `${e.custos.map((c) => (c.cte === SEM_CTE ? 'Sem CTE' : c.cte ? `CTE ${esc(c.cte)}` : esc(this.txtCusto('tipoCusto', c.tipo)))).join(' · ')} · <b>${rs(e.custos.reduce((s, c) => s + (c.valor || 0), 0))}</b>`
+          : '<span class="crit-txt">nenhuma cobrança deste envio</span>';
+        return `<fieldset class="grupo-f grupo-envio" data-env="${k}"><legend>${k + 1}º envio · NF ${esc(e.nf)}${e.serie ? `/${esc(e.serie)}` : ''} · faturada ${fmt(e.dataFat) || '–'}</legend>
+          <p class="nota inteiro">${n0(e.qtd)} un nesta NF${e.prazo ? ` · ${this.pillPrazo({ prazo: e.prazo, atraso: e.atraso } as Reg)}` : ''}</p>
+          ${data('dataEnvio', 'Data de envio', e.dataEnvio)}
+          ${data('dataPrevisao', 'Previsão de entrega (transportadora)', e.dataPrevisao, false)}
+          ${data('dataEntrega', 'Data de entrega', e.entFinal)}
+          <div class="campo"><label for="${id('tipoMaterial')}">Tipo de material</label><select id="${id('tipoMaterial')}" ${dis}>${ops(this.op('tipoMaterial'), e.tipoMaterial)}</select></div>
+          <div class="campo"><label for="${id('indicador')}">Indicador de atraso</label><select id="${id('indicador')}" ${dis}>${ops(this.op('indicador'), e.indicador)}</select></div>
+          <div class="campo"><label for="${id('transportadora')}">Transportadora deste envio</label><input id="${id('transportadora')}" list="lg-transps" value="${esc(nomeT(e.transportadora))}" placeholder="Código ou nome" ${dis}></div>
+          <p class="inteiro env-cob"><b>CTE e frete:</b> ${cobs}${resp?.temCustos ? ` <button type="button" class="btn-txt" data-acao="custo-novo" data-envnf="${esc(e.nf)}" ${resp?.temNfCusto ? '' : 'disabled title="Falta o campo ZLC_NF: rodar o U_LOGRELUPD, opção Tabelas"'}>+ Cobrança deste envio</button>` : ''}</p>
+          <div class="inteiro acoes-env"><span class="muted" id="${id('msg')}" aria-live="polite"></span><button type="button" class="btn pri" data-acao="envio-salvar" data-env="${k}" ${dis}>${this.salvandoEnvio === k ? 'Gravando…' : 'Salvar envio'}</button></div>
+        </fieldset>`;
+      })
+      .join('');
+    const aviso = sem ? '<p class="aviso">Tabela de envios (ZLE) ainda não criada neste ambiente: rodar o U_LOGRELUPD, opção Tabelas. Até lá, os envios seguintes só aparecem para consulta.</p>' : '';
+    return `${aviso}<p class="nota">Pedido faturado em ${n0(r.envs.length)} NFs: cada NF é um envio. O 1º (NF ${esc(r.envs[0].nf)}) fica em "Envio e entrega"; os seguintes, abaixo, gravam com o botão de cada um.</p>${blocos}`;
+  }
+
+  private async salvarEnvio(k: number): Promise<void> {
+    const r = this.reg(this.aberto);
+    const e = r?.envs.find((x) => x.idx === k);
+    if (!r || !e || this.salvandoEnvio >= 0) return;
+    const q = <T extends HTMLElement>(c: string) => this.el.camada.querySelector(`#ev${k}-${c}`) as T | null;
+    const val = (c: string) => (q<HTMLInputElement>(c)?.value || '').trim();
+    const msg = (t: string, erro = true) => {
+      const m = q<HTMLElement>('msg');
+      if (m) {
+        m.textContent = t;
+        m.classList.toggle('crit-txt', erro);
+      }
+      if (erro) this.aviso(t, true);
+    };
+    const trTxt = val('transportadora');
+    const tr = trTxt.includes(' - ') ? trTxt.split(' - ')[0].trim() : trTxt.toUpperCase();
+    const novo: Record<string, string> = {
+      dataEnvio: val('dataEnvio'),
+      dataPrevisao: val('dataPrevisao'),
+      dataEntrega: val('dataEntrega'),
+      tipoMaterial: val('tipoMaterial'),
+      indicador: val('indicador'),
+      transportadora: tr,
+    };
+    if (novo['dataEnvio'] && e.dataFat && novo['dataEnvio'] < e.dataFat) return msg(`O envio (${fmt(novo['dataEnvio'])}) é anterior à emissão da NF (${fmt(e.dataFat)}).`);
+    if (novo['dataEntrega'] && !novo['dataEnvio']) return msg('A entrega exige a data de envio.');
+    if (novo['dataEntrega'] && novo['dataEntrega'] < novo['dataEnvio']) return msg(`A entrega (${fmt(novo['dataEntrega'])}) é anterior ao envio (${fmt(novo['dataEnvio'])}).`);
+    if (tr && !(this.resp?.transportadoras || []).some(([c]) => c === tr)) return msg(`Transportadora "${tr}" não encontrada no cadastro (escolha na lista).`);
+    const atual: Record<string, string> = { dataEnvio: e.dataEnvio, dataPrevisao: e.dataPrevisao, dataEntrega: e.entFinal, tipoMaterial: e.tipoMaterial, indicador: e.indicador, transportadora: e.transportadora };
+    const corpo: EnvioEdicao = { recno: r.p.recno, nf: e.nf, serie: e.serie };
+    const b = corpo as unknown as Record<string, string | number>;
+    Object.keys(novo).forEach((c) => {
+      if (novo[c] !== atual[c]) b[c] = novo[c];
+    });
+    if (Object.keys(b).length <= 3) return msg('Nada mudou neste envio.', false);
+    this.salvandoEnvio = k;
+    this.redesenharEnvios();
+    try {
+      const novoPed = await this.api.salvarEnvio(corpo);
+      this.salvandoEnvio = -1;
+      if (novoPed && novoPed.pedido) {
+        const i = this.regs.findIndex((x) => x.p.recno === r.p.recno);
+        if (i >= 0) this.regs[i] = this.montar(novoPed);
+      }
+      this.redesenharEnvios();
+      this.redesenharCustos();
+      this.desenhar();
+      this.atualizarForm();
+      if (this.hist) void this.carregarHist();
+      this.aviso(`Envio da NF ${e.nf} gravado.`);
+      if (novoPed?.avisoHistorico) this.aviso(novoPed.avisoHistorico, true);
+    } catch (err) {
+      this.salvandoEnvio = -1;
+      this.redesenharEnvios();
+      msg(`Não foi possível gravar o envio: ${this.api.mensagemErro(err)}`);
+    }
+  }
+
+  private redesenharEnvios(): void {
+    const r = this.reg(this.aberto);
+    const box = this.el.camada.querySelector('#lg-envios');
+    if (r && box) box.innerHTML = this.enviosHtml(r);
+  }
+
   /** Redesenha so os blocos de custos e de frete (o formulario do pedido fica como esta) */
   private redesenharCustos(): void {
     const r = this.reg(this.aberto);
     if (!r) return;
     const box = this.el.camada.querySelector('#lg-custos');
     if (box) box.innerHTML = this.custosHtml(r);
+    const env = this.el.camada.querySelector('#lg-envios');
+    if (env) env.innerHTML = this.enviosHtml(r);
     const fr = this.el.camada.querySelector('#lg-frete');
     if (fr) fr.innerHTML = this.freteHtml(r);
   }
@@ -2207,11 +2507,13 @@ export class Painel {
         situacao: situ,
         obs: (q<HTMLTextAreaElement>('cf-obs')?.value || '').replace(/\s*\r?\n\s*/g, ' ').trim(),
       });
+      const selNf = q<HTMLSelectElement>('cf-nf');
+      if (selNf) corpo.nf = selNf.value;
       if (acao === 'alterar') {
         // so o que mudou (o historico grava campo a campo)
         const c = (r.p.custos || []).find((x) => x.item === corpo.item);
         if (c) {
-          const atual: Record<string, string | number> = { tipo: c.tipo, cte: c.cte, data: c.data, transportadora: c.transportadora, valor: c.valor, valorEsperado: c.valorEsperado, situacao: c.situacao, obs: c.obs };
+          const atual: Record<string, string | number> = { tipo: c.tipo, cte: c.cte, data: c.data, transportadora: c.transportadora, valor: c.valor, valorEsperado: c.valorEsperado, situacao: c.situacao, obs: c.obs, nf: c.nf && c.nf !== r.p.nfPrincipal ? c.nf : '' };
           const b = corpo as unknown as Record<string, string | number>;
           Object.keys(atual).forEach((k) => {
             const a = atual[k];
@@ -3084,8 +3386,14 @@ export class Painel {
         else if (a === 'fechar-modal') this.fecharModal();
         else if (a === 'salvar') void this.salvar();
         else if (a === 'custos') this.custosAbertos = !(this.el.camada.querySelector('#lg-custos-d') as HTMLDetailsElement | null)?.open;
-        else if (a === 'custo-novo' || a === 'custo-editar') {
+        else if (a === 'envio-salvar') void this.salvarEnvio(Number(ac.dataset['env']));
+        else if (a === 'ev-hoje') {
+          const inp = this.el.camada.querySelector('#' + (ac.dataset['alvo'] || '')) as HTMLInputElement | null;
+          if (inp && !inp.disabled) inp.value = iso(this.hoje);
+        } else if (a === 'custo-novo' || a === 'custo-editar') {
           this.custoEdit = a === 'custo-novo' ? '' : ac.dataset['item'] || '';
+          this.custoNf = a === 'custo-novo' ? ac.dataset['envnf'] || '' : '';
+          if (a === 'custo-novo' && ac.dataset['envnf'] !== undefined) (this.el.camada.querySelector('#lg-custos') as HTMLElement | null)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
           this.custosAbertos = true;
           this.redesenharCustos();
           (this.el.camada.querySelector('#cf-tipo') as HTMLElement | null)?.focus();

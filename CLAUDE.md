@@ -4,7 +4,7 @@ Tela PO UI dentro do Protheus para a logística acompanhar e editar os pedidos d
 
 | Parte | Arquivo | Vai para o RPO |
 |---|---|---|
-| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`), versão `LG_VERSAO` = `2026-11-24b` | sim |
+| API | `API/RESTLOGREL.tlpp` (`getVsLogPedidos`, `putVsLogPedido`, `postVsLogBusca`, `postVsLogCusto`, `getVsLogHistorico`, `getVsLogRevDiag`, `postVsLogEnvio`), versão `LG_VERSAO` = `2026-11-25a` | sim |
 | Tabelas | `COMPAT/LOGRELUPD.prw` (`U_LOGRELUPD`): campos `C5_Z*` (Exportar/Importar) e, desde 19/11/2026, as tabelas ZLC/ZLH (opção Tabelas + carga inicial) | sim |
 | Menu | `LOGRELAPP/LOGRELAPP.PRW` (`U_LOGRELAPP` → `FwCallApp("logrel")`) | sim |
 | Tela | `app/` (Angular 21, PO UI 21.36, `@totvs/protheus-lib-core` 21.1.4) → `app/dist/<ambiente>/logrel.app` | sim (recurso) |
@@ -294,7 +294,49 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - `INDICA_PADRAO` ganhou `7=Outros`.
   - **Testado** com a API falsa do comunicado, copiada no scratchpad com PUT e 3 finalizados, e Edge headless: 29 verificações ok, sem erro de JavaScript, celular sem rolagem lateral. A planilha foi conferida no Node (`vm`) com a mesma API. Pacotes regerados em 24/11 17:40. **API não compilada nem testada no Protheus.**
 
+- **25/11/2026, pedido do usuário: envios parciais** (API `2026-11-25a` + `LOGRELUPD` + `logrel.app` + planilha).
+  - **O pedido:** o usuário fatura o mesmo pedido de venda em partes e precisa lançar frete e CTE de cada novo envio.
+  - **Respostas do usuário:**
+    - cada envio tem **uma NF própria**;
+    - por envio: CTE, valor do frete, data de envio, previsão, data de entrega, tipo de material e indicador de atraso;
+    - a observação é a mesma do pedido;
+    - **a transportadora pode ser diferente** da do 1º faturamento;
+    - a reentrega fica por pedido (proposta aceita).
+  - **Desenho aprovado:**
+    - o 1º envio (NF mais antiga, `nfPrincipal`) fica nos campos da SC5;
+    - os seguintes ficam na **ZLE**, com `ZLE_FILIAL+ZLE_PEDIDO+ZLE_NF+ZLE_SERIE` (índice 1), `ZLE_DTENV`, `ZLE_DTPREV`, `ZLE_DTENTR`, `ZLE_TPMAT` e `ZLE_INDICA` (combos copiados de `C5_ZTPMAT`/`C5_ZINDICA` na criação), `ZLE_TRANSP` (padrão `F2_TRANSP`) e o carimbo;
+    - **`ZLC_NF`** na ZLC: vazio = 1º envio.
+  - **API:**
+    - a consulta lê `F2_TRANSP` e monta as NFs de cada pedido (`aNfsAll`, na mesma ordem do `aPed`);
+    - `EnviosPedidos`/`EnvioLote` montam `nfPrincipal` e `envios` (NFs depois da 1ª, ordenadas por emissão e número);
+    - `TemTab("ZLE")`; o GET manda `temEnvios` e `temNfCusto`;
+    - `CustoLote(…, lNf)` lê o `ZLC_NF` só se a coluna existe. O `GravaCusto` aceita `nf`: `NfDoPedido` confere que a NF é do pedido, e sem a coluna devolve `CAMPO_INEXISTENTE`. `ResumoCusto` mostra a NF;
+    - rota nova **`POST /logistica/envios`** (`GravaEnvio`, `MapaEnvio`):
+      - inclui ou altera a linha da ZLE, só com os campos do corpo;
+      - regras: envio ≥ emissão da NF, entrega exige envio e entrega ≥ envio, combos do `C5_ZTPMAT`/`C5_ZINDICA`, transportadora no SA4;
+      - grava o histórico na ZLH (`ZLH_CAMPO` = `ZLE_*`, título "NF x - campo").
+  - **Tela:**
+    - `envios()` e `envio()` montam `Reg.envs` (`Env`, com idx 0 = SC5). No `montar`, a etapa do pedido sai dos envios: ret > todos entregues > fin > algum em trânsito > fat. O prazo é o do pior envio (`RANK_PRAZO`) e o `entFinal` é a última entrega;
+    - `pendencias(…, envs)` troca as pendências de envio pelas de cada NF;
+    - `saiuHoje` é usado nos cartões e no quadro Enviados hoje;
+    - gaveta: `enviosHtml` (`#lg-envios`, botões `envio-salvar`/`ev-hoje`, `data-envnf` no "+ Cobrança deste envio", porque `data-nf` já é do DANFE), `salvarEnvio` (manda só o que mudou), `cf-nf` no formulário da cobrança e a coluna "Envio" na tabela de custos;
+    - `porEnvio()` gera um registro por envio para os Indicadores e a aba Envios do XLSX; a Lista usa o envio da NF do item (`envioDoItem`);
+    - planilha: `envios_`/`envio_`, `pendencias_` por envio, `saiuNoDia_` e a aba **Envios** (`gravarEnvios_`).
+  - **Testado** com a API falsa (`mock4`, 3 pedidos em 2 NFs, POST de envios e de custos) e Chrome headless: 17 verificações ok.
+    - Quadros: Enviados, Entregues e Faturados conforme os envios; selo "1 de 2 envios"; pendência de envio da 2ª NF.
+    - O POST de envio manda só o que mudou, e o pedido entra em Enviados hoje.
+    - A cobrança vem com a NF escolhida e aparece no bloco do envio.
+    - Indicadores e Lista abrem. Sem erro de JavaScript, e o celular sem rolagem lateral.
+  - **Não compilado nem testado no Protheus.**
+
 ## Pendências
+- **25/11/2026, envios parciais:**
+  1. Homologação: compilar `LOGRELUPD.prw`.
+  2. Rodar o `U_LOGRELUPD`, opção **Tabelas**, fora do expediente. Ele cria a **ZLE** e o **`ZLC_NF`**.
+  3. Sair e entrar no Protheus.
+  4. Compilar `RESTLOGREL.tlpp` `2026-11-25a`, que inclui a `24b`, e o `logrel.app`.
+  5. Conferir num pedido faturado em 2 NFs: o bloco do 2º envio, gravar datas, "+ Cobrança deste envio" e o histórico.
+  6. Depois, na produção, a mesma ordem. Colar o `planilha/Codigo.gs` novo, que tem a aba Envios.
 - **24/11/2026 (5ª), finalização sem entrega:**
   1. Compilar `RESTLOGREL.tlpp` `2026-11-24b` e o `logrel.app` na homologação e depois na produção. A `24b` inclui o diagnóstico da `24a`.
   2. **Criar a opção `7=Outros` no combo (X3_CBOX) do `C5_ZINDICA`** pelo Configurador, nas duas bases. Sem ela, o "Outros" não aparece: a tela usa o combo do SX3.

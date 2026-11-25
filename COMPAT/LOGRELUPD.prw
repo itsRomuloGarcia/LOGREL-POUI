@@ -8,6 +8,8 @@
 #define TB_ZLH    "ZLH"
 #define NM_ZLC    "CUSTOS DE FRETE DO PEDIDO"
 #define NM_ZLH    "HISTORICO DA LOGISTICA"
+#define TB_ZLE    "ZLE"
+#define NM_ZLE    "ENVIOS DO PEDIDO"
 
 /*/{Protheus.doc} LOGRELUPD
 Compatibilizador dos campos C5_Z* da tela de logistica (LOGREL).
@@ -34,6 +36,9 @@ Pode rodar de novo: so cria o que falta.
    inicial: o CTE e o CTE da reentrega da SC5 viram cobrancas de Envio e
    Reentrega na ZLC, com a conferencia das somas. Tabela nova no dicionario
    pede sair e entrar no Protheus e rodar a opcao de novo para a carga.
+   Desde 25/11/2026 tambem cria a ZLE (envios parciais: um envio por NF do
+   pedido depois da 1a, com datas, tipo de material, indicador e
+   transportadora) e o campo ZLC_NF (NF do envio de cada cobranca).
 Texto do arquivo vai em Base64 (Encode64) para nao estragar os campos
 codificados do SX3 na troca de codificacao.
 Rodar pelo menu, com a empresa aberta, FORA DO EXPEDIENTE (o X31UpdTable
@@ -57,8 +62,8 @@ User Function LOGRELUPD()
       "IMPORTAR (rodar na PRODUCAO): le esse arquivo, mostra o que vai ser criado " + ;
       "e, confirmado, cria so os campos que faltam e altera a SC5 no banco. " + ;
       "Fora do expediente." + CRLF + CRLF + ;
-      "TABELAS: cria ou completa a " + TB_ZLC + " (custos de frete) e a " + TB_ZLH + ;
-      " (historico da logistica) e copia os CTEs da SC5 para a " + TB_ZLC + ".", ;
+      "TABELAS: cria ou completa a " + TB_ZLC + " (custos de frete), a " + TB_ZLH + ;
+      " (historico da logistica) e a " + TB_ZLE + " (envios parciais) e copia os CTEs da SC5 para a " + TB_ZLC + ".", ;
       {"Exportar", "Importar", "Tabelas", "Cancelar"}, 3)
    If nOpc == 1
       Exporta()
@@ -497,14 +502,16 @@ Static Function Tabelas()
    Local cLog  := ""
    Local lNovo := .F.
 
-   If !MsgYesNo("Cria ou completa as tabelas " + TB_ZLC + " (" + NM_ZLC + ") e " + TB_ZLH + " (" + NM_ZLH + ") " + ;
+   If !MsgYesNo("Cria ou completa as tabelas " + TB_ZLC + " (" + NM_ZLC + "), " + TB_ZLH + " (" + NM_ZLH + ") e " + ;
+         TB_ZLE + " (" + NM_ZLE + ") " + ;
          "na empresa " + cEmpAnt + "." + CRLF + CRLF + ;
          "Mexe no dicionario (SX2, SX3, SIX) e cria as tabelas no banco. Depois oferece a carga " + ;
          "inicial dos CTEs da SC5. Primeiro na homologacao." + CRLF + CRLF + "Continuar?", UP_TIT)
       Return
    EndIf
    FWMsgRun(, {|| cLog := CriaTab(TB_ZLC, NM_ZLC, "FREIGHT COSTS BY ORDER", CamposZLC(), IndicesZLC(), @lNovo) + CRLF + ;
-      CriaTab(TB_ZLH, NM_ZLH, "LOGISTICS HISTORY", CamposZLH(), IndicesZLH(), @lNovo) }, UP_TIT, "Atualizando o dicionario...")
+      CriaTab(TB_ZLH, NM_ZLH, "LOGISTICS HISTORY", CamposZLH(), IndicesZLH(), @lNovo) + CRLF + ;
+      CriaTab(TB_ZLE, NM_ZLE, "ORDER SHIPMENTS", CamposZLE(), IndicesZLE(), @lNovo) }, UP_TIT, "Atualizando o dicionario...")
    If "PARADO" $ cLog .or. "ERRO" $ cLog
       Aviso(UP_TIT + " - tabelas", cLog, {"Ok"}, 3)
       Return
@@ -546,6 +553,8 @@ Static Function CamposZLC()
    aAdd(aC, {"ZLC_USUARI", "C", 25, 0, "Usuario", "Ultimo usuario", "", "", "N", "C2_OBS"})
    aAdd(aC, {"ZLC_DTALT", "D", 8, 0, "Dt. Alter.", "Data da ultima alteracao", "", "", "N", "C2_DATRF"})
    aAdd(aC, {"ZLC_HRALT", "C", 8, 0, "Hr. Alter.", "Hora da ultima alteracao", "99:99:99", "", "N", "C2_OBS"})
+   // NF do envio (25/11/2026): vazio = envio principal (o dos campos da SC5)
+   aAdd(aC, {"ZLC_NF", "C", TamSX3("F2_DOC")[1], 0, "NF Envio", "NF do envio da cobranca", "@!", "", "S", "C2_OBS"})
 Return aC
 
 Static Function IndicesZLC()
@@ -569,6 +578,34 @@ Static Function CamposZLH()
    aAdd(aC, {"ZLH_CODUSR", "C", 6, 0, "Cod. Usuar.", "Codigo do usuario", "@!", "", "N", "C2_OBS"})
    aAdd(aC, {"ZLH_USUARI", "C", 25, 0, "Usuario", "Nome do usuario", "", "", "S", "C2_OBS"})
 Return aC
+
+// ZLE (25/11/2026): envios parciais, um por NF do pedido depois da 1a. Os
+// combos de tipo de material e indicador sao copiados do C5_ZTPMAT/C5_ZINDICA
+Static Function CamposZLE()
+   Local aC    := {}
+   Local xMat  := GetSX3Cache("C5_ZTPMAT", "X3_CBOX")
+   Local xInd  := GetSX3Cache("C5_ZINDICA", "X3_CBOX")
+   Local cMat  := IIf(ValType(xMat) == "C", AllTrim(xMat), "")
+   Local cInd  := IIf(ValType(xInd) == "C", AllTrim(xInd), "")
+   aAdd(aC, {"ZLE_FILIAL", "C", 0, 0, "Filial", "Filial do sistema", "", "", "N", "C2_FILIAL"})
+   aAdd(aC, {"ZLE_PEDIDO", "C", TamSX3("C5_NUM")[1], 0, "Pedido", "Pedido de venda", "@!", "", "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_NF", "C", TamSX3("F2_DOC")[1], 0, "NF", "NF do envio", "@!", "", "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_SERIE", "C", TamSX3("F2_SERIE")[1], 0, "Serie", "Serie da NF", "@!", "", "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_DTENV", "D", 8, 0, "Dt. Envio", "Data de envio", "", "", "S", "C2_DATRF"})
+   aAdd(aC, {"ZLE_DTPREV", "D", 8, 0, "Prev.Entrega", "Previsao de entrega", "", "", "S", "C2_DATRF"})
+   aAdd(aC, {"ZLE_DTENTR", "D", 8, 0, "Dt. Entrega", "Data de entrega", "", "", "S", "C2_DATRF"})
+   aAdd(aC, {"ZLE_TPMAT", "C", 1, 0, "Tp. Material", "Tipo de material", "@!", cMat, "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_INDICA", "C", 1, 0, "Indicador", "Indicador de atraso", "@!", cInd, "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_TRANSP", "C", TamSX3("A4_COD")[1], 0, "Transp.", "Transportadora do envio", "@!", "", "S", "C2_OBS"})
+   aAdd(aC, {"ZLE_CODUSR", "C", 6, 0, "Cod. Usuar.", "Codigo do usuario", "@!", "", "N", "C2_OBS"})
+   aAdd(aC, {"ZLE_USUARI", "C", 25, 0, "Usuario", "Ultimo usuario", "", "", "N", "C2_OBS"})
+   aAdd(aC, {"ZLE_DTALT", "D", 8, 0, "Dt. Alter.", "Data da ultima alteracao", "", "", "N", "C2_DATRF"})
+   aAdd(aC, {"ZLE_HRALT", "C", 8, 0, "Hr. Alter.", "Hora da ultima alteracao", "99:99:99", "", "N", "C2_OBS"})
+Return aC
+
+Static Function IndicesZLE()
+Return { ;
+   {"1", "ZLE_FILIAL+ZLE_PEDIDO+ZLE_NF+ZLE_SERIE", "Pedido+NF+Serie"}}
 
 Static Function IndicesZLH()
 Return { ;

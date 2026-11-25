@@ -337,6 +337,35 @@ Os combos de motivo e reembolso são fixos na API (`FIN_MOTIVOS`, `FIN_REEMB`) e
 
 **Importação por planilha:** continua. O CTE e o valor do envio e da reentrega vão para a 1ª cobrança de Envio e de Reentrega do pedido na ZLC, criada se não existir. O histórico marca essas linhas como importação.
 
+## Envios parciais (ZLE), desde 25/11/2026
+
+Pedido faturado em partes, com o mesmo pedido de venda: **cada NF é um envio**. Pedido do usuário: a logística precisa lançar CTE, frete e as datas de cada envio.
+
+- **O 1º envio** é a NF mais antiga (`nfPrincipal`). Ele continua nos campos de "Envio e entrega" da SC5, como sempre. Pedido de uma NF só não muda nada.
+- **Os envios seguintes** ficam na tabela **ZLE (envios do pedido)**, uma linha por NF, com:
+  - data de envio, previsão de entrega e data de entrega;
+  - tipo de material e indicador de atraso;
+  - transportadora do envio, que vem com a da NF (`F2_TRANSP`) e pode ser trocada.
+
+  A observação, a reentrega e o retorno continuam um só por pedido.
+- **CTE e frete de cada envio** são cobranças da ZLC com o campo **`ZLC_NF`** (vazio = 1º envio). Valem as mesmas regras: vários CTEs, "Sem CTE", divergência.
+- **Gaveta:** o 1º envio fica em "Envio e entrega · 1º envio (NF …)". Cada NF seguinte tem um bloco próprio:
+  - mostra os campos acima, a situação do prazo e as cobranças daquele envio;
+  - **"+ Cobrança deste envio"** abre o formulário de cobrança já com a NF certa;
+  - **"Salvar envio"** grava na hora (`POST /logistica/envios`), sem fechar a gaveta;
+  - a tabela de custos ganha a coluna "Envio", e a linha do tempo, as datas de cada envio.
+- **Quadros:** o pedido só vai para **Entregues** quando todos os envios forem entregues.
+  - Com algum envio em trânsito, fica em **Enviados**.
+  - Se nenhum está em trânsito e alguma NF ainda não saiu, fica em **Faturados**.
+  - O prazo é o do pior envio, e o cartão mostra o selo "1 de 2 envios".
+  - As pendências (data de envio, previsão, CTE, tipo de material, indicador) são conferidas em cada NF.
+  - "Saíram hoje" e "Enviados hoje" consideram qualquer envio.
+- **Indicadores e XLSX:**
+  - os indicadores contam cada envio separado;
+  - a Lista mostra, em cada item, as datas e o tipo de material do envio da NF dele;
+  - o XLSX e a planilha Google ganharam a aba **Envios**, com uma linha por envio.
+- **Dicionário:** a ZLE e o `ZLC_NF` são criados pelo `U_LOGRELUPD`, opção **Tabelas**, que só cria o que falta. Sem eles, a tela mostra os envios seguintes só para consulta e avisa para rodar o compatibilizador.
+
 ## Publicar no Protheus
 
 1. Gere o pacote, na pasta `app`: `powershell -ExecutionPolicy Bypass -File .\empacotar.ps1 -Ambiente homologacao`, ou `producao`. O resultado sai em `dist\<ambiente>\logrel.app`. O REST de cada ambiente já está no script (10557 e 10407); `-Rest <url>` troca o endereço.
