@@ -345,6 +345,11 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - Tela: `CAMPO.tipoFrete`, `COMERCIAIS`, `TipoOp`. O `combo` ganhou o parâmetro `extra` (desliga com NF). Com API anterior a `2026-11-25b`, o campo fica desligado.
   - Lista, XLSX e planilha ganharam a coluna "Tipo do frete".
   - Testado com a API falsa: o campo fica em Dados do pedido com as 6 opções; editável sem NF, com o PUT `{"tipoFrete":"F"}`; travado com NF.
+- **25/11/2026 (4ª), compilação na homologação: o REST da porta 10557 lê o RPO do ambiente `romulo`.**
+  - O usuário compilou a `25b` no ambiente `desenvolvimento`, onde "sempre compilava o REST". O log do TDS deu sucesso, mas a API continuou `25a`, mesmo com o REST reiniciado.
+  - Só mudou depois de compilar o `RESTLOGREL.tlpp` **também no `romulo`**.
+  - **Na homologação, compilar a API no `romulo`**, junto com o `logrel.app`. Para conferir, use o Diagnóstico ou o GET (`versao`).
+  - Conferido pela API às 09:33: `2026-11-25b`, `opcoes.tipoFrete` com as 6 opções do SX3. Nos pedidos: 2.556 C, 47 F, 37 S, 1 R, 1 D e 199 vazios; nos 223 sem NF, 118 estão vazios.
 
 ## Pendências
 - **25/11/2026 (3ª):** compilar `RESTLOGREL.tlpp` `2026-11-25b` e o `logrel.app` (homologação e depois produção) e colar o `planilha/Codigo.gs` novo. Conferir se o `X3_CBOX` do `C5_TPFRETE` traz as 6 opções.
