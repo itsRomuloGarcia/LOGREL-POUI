@@ -348,6 +348,10 @@ Pedido faturado em partes, com o mesmo pedido de venda: **cada NF é um envio**.
   - transportadora do envio, que vem com a da NF (`F2_TRANSP`) e pode ser trocada.
 
   A observação, a reentrega e o retorno continuam um só por pedido.
+- **NF emitida no mesmo dia da 1ª** e ainda sem envio próprio lançado **conta como parte do 1º envio** (decisão do usuário em 25/11/2026). Na homologação, 20 dos 21 pedidos em 2 NFs eram assim.
+  - Ela usa as datas, o tipo de material e o indicador do 1º envio, não vira pendência e não muda o quadro do pedido.
+  - O cartão mostra "2 NFs no mesmo envio", e o bloco dela na gaveta diz "Saiu junto com o 1º envio".
+  - Se não saiu junto, o botão **"Não saiu junto: registrar envio separado"** abre os campos já preenchidos com os dados do 1º envio. Ao salvar, o envio é gravado completo na ZLE e passa a contar a parte.
 - **CTE e frete de cada envio** são cobranças da ZLC com o campo **`ZLC_NF`** (vazio = 1º envio). Valem as mesmas regras: vários CTEs, "Sem CTE", divergência.
 - **Gaveta:** o 1º envio fica em "Envio e entrega · 1º envio (NF …)". Cada NF seguinte tem um bloco próprio:
   - mostra os campos acima, a situação do prazo e as cobranças daquele envio;

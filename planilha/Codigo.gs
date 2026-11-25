@@ -276,9 +276,15 @@ function envios_(p, ctx) {
   const lista = [
     envio_(0, nfP, fatDe(nfP), p.dataEnvio, p.dataPrevisao, p.reentrega === "SIM" ? p.dataNovaEntrega : p.dataEntrega, p.tipoMaterial, p.indicador, p.transportadora, cus.filter((c) => !c.nf || c.nf === nfP), qtdDe(nfP), ctx),
   ];
-  outros.forEach((e, k) =>
-    lista.push(envio_(k + 1, e.nf, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf), ctx)),
-  );
+  outros.forEach((e, k) => {
+    // emitida no mesmo dia da 1a e sem envio proprio lancado: saiu junto com o 1o envio (25/11/2026)
+    if (!e.gravado && e.dataFat && e.dataFat === lista[0].dataFat) {
+      const j = Object.assign({}, lista[0], { idx: k + 1, nf: e.nf, dataFat: e.dataFat, transportadora: e.transportadora || lista[0].transportadora, custos: cus.filter((c) => c.nf === e.nf), qtd: qtdDe(e.nf), junto: true });
+      lista.push(j);
+      return;
+    }
+    lista.push(envio_(k + 1, e.nf, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf), ctx));
+  });
   return lista;
 }
 
@@ -301,7 +307,7 @@ function envio_(idx, nf, dataFat, dataEnvio, dataPrevisao, entFinal, tipoMateria
   return {
     idx: idx, nf: nf, dataFat: dataFat || "", dataEnvio: dataEnvio || "", dataPrevisao: dataPrevisao || "",
     entFinal: entFinal || "", tipoMaterial: tipoMaterial || "", indicador: indicador || "",
-    transportadora: transportadora || "", custos: custos, qtd: qtd, et: et, prazo: prazo, atraso: atraso,
+    transportadora: transportadora || "", custos: custos, qtd: qtd, junto: false, et: et, prazo: prazo, atraso: atraso,
   };
 }
 
@@ -335,6 +341,7 @@ function pendencias_(p, et, prazo, ctx, envs) {
   // envios parciais (25/11/2026): o que depende do envio e conferido em cada NF
   const porEnvio = [];
   envs.forEach((e) => {
+    if (e.junto) return;
     if (e.et === "fat") {
       if (e.dataFat && dias_(dt_(e.dataFat), ctx.hoje) > DIAS_FAT_PARADO) porEnvio.push("envio");
       return;
@@ -379,12 +386,16 @@ function gravarEnvios_(regs, ctx) {
       linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
       return;
     }
-    r.envs.forEach((e) => {
+    // NF que saiu junto com o 1o envio entra na linha dele
+    const distintos = r.envs.filter((e) => !e.junto);
+    const juntas = r.envs.filter((e) => e.junto).map((e) => e.nf);
+    distintos.forEach((e, n) => {
       const custo = e.custos.reduce((s, c) => s + (c.valor || 0), 0);
       const v = [
-        r.p.pedido, (e.idx + 1) + "º de " + r.envs.length, e.nf, e.dataFat, cliente, nomeT(e.transportadora),
+        r.p.pedido, (n + 1) + "º de " + distintos.length, e.idx === 0 ? [e.nf].concat(juntas).join(", ") : e.nf, e.dataFat, cliente, nomeT(e.transportadora),
         e.dataEnvio, e.dataPrevisao, e.entFinal, PRAZOS[e.prazo].nome, e.prazo === "atrasado" && e.atraso !== null ? e.atraso : "",
-        txtOp_(ctx, "tipoMaterial", e.tipoMaterial), txtOp_(ctx, "indicador", e.indicador), cteTxt(e.custos), custo ? r2_(custo) : "", e.qtd,
+        txtOp_(ctx, "tipoMaterial", e.tipoMaterial), txtOp_(ctx, "indicador", e.indicador), cteTxt(e.custos), custo ? r2_(custo) : "",
+        e.idx === 0 ? e.qtd + r.envs.filter((x) => x.junto).reduce((s, x) => s + x.qtd, 0) : e.qtd,
       ];
       linhas.push(v.map((x, k) => valorCelula_(col[k][1], x)));
     });

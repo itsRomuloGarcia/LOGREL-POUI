@@ -203,6 +203,9 @@ interface Env {
   transportadora: string;
   custos: Custo[];
   qtd: number;
+  /** NF emitida no mesmo dia da 1a e sem envio proprio na ZLE: saiu junto com o
+   *  1o envio (decisao do usuario, 25/11/2026) e herda os dados dele */
+  junto: boolean;
   et: 'fat' | 'env' | 'ent';
   prazo: Prazo;
   atraso: number | null;
@@ -449,6 +452,8 @@ export class Painel {
   private custoNf = '';
   /** envio (indice em r.envs) sendo gravado */
   private salvandoEnvio = -1;
+  /** NFs "junto com o 1o envio" que o usuario abriu para registrar um envio separado */
+  private readonly separar = new Set<string>();
   /** janela do Exportar XLSX (aberta) */
   private xl: { recorte: string; filtros: boolean; abas: Set<string> } | null = null;
   /** historico do pedido aberto (lido ao abrir o bloco) */
@@ -783,6 +788,7 @@ export class Painel {
     // envios parciais (25/11/2026): o que depende do envio e conferido em cada NF
     const porEnvio: Pend[] = [];
     envs.forEach((e) => {
+      if (e.junto) return;
       if (e.et === 'fat') {
         if (e.dataFat && dias(dt(e.dataFat) as Date, this.hoje) > DIAS_FAT_PARADO) porEnvio.push('envio');
         return;
@@ -810,9 +816,13 @@ export class Painel {
     const principal = this.envio(0, nfP, '', fatDe(nfP), p.dataEnvio, p.dataPrevisao, p.reentrega === 'SIM' ? p.dataNovaEntrega : p.dataEntrega, p.tipoMaterial, p.indicador, p.transportadora, cus.filter((c) => !c.nf || c.nf === nfP), qtdDe(nfP));
     return [
       principal,
-      ...outros.map((e, k) =>
-        this.envio(k + 1, e.nf, e.serie, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf)),
-      ),
+      ...outros.map((e, k) => {
+        // emitida no mesmo dia da 1a e sem envio proprio lancado: saiu junto com o 1o envio
+        if (!e.gravado && e.dataFat && e.dataFat === principal.dataFat) {
+          return { ...principal, idx: k + 1, nf: e.nf, serie: e.serie, dataFat: e.dataFat, transportadora: e.transportadora || principal.transportadora, custos: cus.filter((c) => c.nf === e.nf), qtd: qtdDe(e.nf), junto: true };
+        }
+        return this.envio(k + 1, e.nf, e.serie, e.dataFat, e.dataEnvio, e.dataPrevisao, e.dataEntrega, e.tipoMaterial, e.indicador, e.transportadora, cus.filter((c) => c.nf === e.nf), qtdDe(e.nf));
+      }),
     ];
   }
 
@@ -832,7 +842,7 @@ export class Painel {
         prazo = falta < 0 ? 'atrasado' : falta <= DIAS_VENCE ? 'vence' : 'noprazo';
       }
     }
-    return { idx, nf, serie, dataFat, dataEnvio: dataEnvio || '', dataPrevisao: dataPrevisao || '', entFinal: entFinal || '', tipoMaterial: tipoMaterial || '', indicador: indicador || '', transportadora: transportadora || '', custos, qtd, et, prazo, atraso };
+    return { idx, nf, serie, dataFat, dataEnvio: dataEnvio || '', dataPrevisao: dataPrevisao || '', entFinal: entFinal || '', tipoMaterial: tipoMaterial || '', indicador: indicador || '', transportadora: transportadora || '', custos, qtd, junto: false, et, prazo, atraso };
   }
 
   /** Algum envio do pedido saiu hoje (o 1o ou um parcial) */
@@ -852,8 +862,10 @@ export class Painel {
     const transps = this.resp?.transportadoras || [];
     return regs.flatMap((r) => {
       if (!r.envs.length) return [r];
-      return r.envs.map((e) => {
+      const juntas = r.envs.filter((e) => e.junto).map((e) => e.nf);
+      return r.envs.filter((e) => !e.junto).map((e) => {
         const prin = e.idx === 0;
+        const nfsDoEnvio = prin ? [e.nf, ...juntas] : [e.nf];
         const p2: Pedido = {
           ...r.p,
           envios: [],
@@ -872,8 +884,8 @@ export class Painel {
           custos: e.custos,
           frete: prin ? r.p.frete : 0,
           freteNaoDestacado: prin ? r.p.freteNaoDestacado : 0,
-          itens: (r.p.itens || []).filter((i) => i.nota === e.nf),
-          notas: e.nf ? [e.nf] : [],
+          itens: (r.p.itens || []).filter((i) => nfsDoEnvio.includes(i.nota)),
+          notas: nfsDoEnvio.filter(Boolean),
           dataFaturamento: e.dataFat,
         };
         return this.montar(p2);
@@ -1192,8 +1204,11 @@ export class Painel {
     if (p.reentrega === 'SIM') pills.push(`<span class="pill reent">Reentrega</span>`);
     if (r.parcial) pills.push(`<span class="pill semprev">NF parcial</span>`);
     if (r.envs.length) {
-      const sairam = r.envs.filter((e) => e.dataEnvio).length;
-      pills.push(`<span class="pill mat" title="Pedido faturado em ${r.envs.length} NFs: ${r.envs.map((e) => `NF ${e.nf} ${e.et === 'ent' ? 'entregue' : e.et === 'env' ? 'em trânsito' : 'aguardando saída'}`).join('; ')}">${sairam} de ${r.envs.length} envios</span>`);
+      // NF que saiu junto com o 1o envio nao conta como envio a parte
+      const distintos = r.envs.filter((e) => !e.junto);
+      const sairam = distintos.filter((e) => e.dataEnvio).length;
+      const tit = `Pedido faturado em ${r.envs.length} NFs: ${r.envs.map((e) => `NF ${e.nf} ${e.junto ? 'junto com o 1º envio' : e.et === 'ent' ? 'entregue' : e.et === 'env' ? 'em trânsito' : 'aguardando saída'}`).join('; ')}`;
+      pills.push(`<span class="pill mat" title="${esc(tit)}">${distintos.length > 1 ? `${sairam} de ${distintos.length} envios` : `${r.envs.length} NFs no mesmo envio`}</span>`);
     }
     if (r.et === 'ret' && !p.pedidoReenvio) pills.push(`<span class="pill atrasado">Aguardando reenvio</span>`);
     if (r.et === 'ret' && p.motivoRetorno) pills.push(`<span class="pill semprev">${esc(this.txtOp('motivoRetorno', p.motivoRetorno))}</span>`);
@@ -1899,7 +1914,7 @@ export class Painel {
       ['Entrega', p.dataEntrega],
     ];
     if (reent) passos.push(['Nova entrega (reentrega)', p.dataNovaEntrega]);
-    r.envs.slice(1).forEach((e) => {
+    r.envs.slice(1).filter((e) => !e.junto).forEach((e) => {
       passos.push([`${e.idx + 1}º envio (NF ${e.nf})`, e.dataEnvio]);
       passos.push([`Entrega do ${e.idx + 1}º envio`, e.entFinal]);
     });
@@ -2313,6 +2328,7 @@ export class Painel {
     const selEnvio =
       r.envs.length && this.resp?.temNfCusto
         ? `<div class="campo inteiro"><label for="cf-nf">Envio</label><select id="cf-nf" ${this.salvandoCusto ? 'disabled' : ''}>${r.envs
+            .filter((e) => !e.junto || e.nf === nfSel)
             .map((e) => `<option value="${e.idx ? esc(e.nf) : ''}" ${(e.idx ? e.nf : '') === nfSel ? 'selected' : ''}>${e.idx + 1}º envio · NF ${esc(e.nf)}</option>`)
             .join('')}</select></div>`
         : '';
@@ -2365,6 +2381,13 @@ export class Painel {
       .map((e) => {
         const k = e.idx;
         const id = (c: string) => `ev${k}-${c}`;
+        // NF do mesmo dia da 1a, sem envio proprio: segue o 1o envio ate alguem registrar a parte
+        if (e.junto && !this.separar.has(e.nf)) {
+          return `<fieldset class="grupo-f grupo-envio" data-env="${k}"><legend>NF ${esc(e.nf)}${e.serie ? `/${esc(e.serie)}` : ''} · faturada ${fmt(e.dataFat) || '–'}</legend>
+          <p class="nota inteiro">${n0(e.qtd)} un nesta NF. <b>Saiu junto com o 1º envio</b> (NF emitida no mesmo dia): usa as datas, o tipo de material e o indicador do 1º envio.</p>
+          <div class="inteiro acoes-env"><button type="button" class="btn" data-acao="envio-separar" data-envnf="${esc(e.nf)}" ${sem ? 'disabled' : ''}>Não saiu junto: registrar envio separado</button></div>
+        </fieldset>`;
+        }
         const dis = sem || this.salvandoEnvio === k ? 'disabled' : '';
         const data = (c: string, rot: string, v: string, hoje = true) =>
           `<div class="campo"><label for="${id(c)}">${rot}</label><div class="com-hoje"><input id="${id(c)}" type="date" value="${esc(v)}" ${dis}>${hoje ? `<button type="button" class="btn-txt" data-acao="ev-hoje" data-alvo="${id(c)}" ${dis}>Hoje</button>` : ''}</div></div>`;
@@ -2420,7 +2443,7 @@ export class Painel {
     const corpo: EnvioEdicao = { recno: r.p.recno, nf: e.nf, serie: e.serie };
     const b = corpo as unknown as Record<string, string | number>;
     Object.keys(novo).forEach((c) => {
-      if (novo[c] !== atual[c]) b[c] = novo[c];
+      if (novo[c] !== atual[c] || (e.junto && novo[c])) b[c] = novo[c];
     });
     if (Object.keys(b).length <= 3) return msg('Nada mudou neste envio.', false);
     this.salvandoEnvio = k;
@@ -3387,6 +3410,10 @@ export class Painel {
         else if (a === 'salvar') void this.salvar();
         else if (a === 'custos') this.custosAbertos = !(this.el.camada.querySelector('#lg-custos-d') as HTMLDetailsElement | null)?.open;
         else if (a === 'envio-salvar') void this.salvarEnvio(Number(ac.dataset['env']));
+        else if (a === 'envio-separar') {
+          this.separar.add(ac.dataset['envnf'] || '');
+          this.redesenharEnvios();
+        }
         else if (a === 'ev-hoje') {
           const inp = this.el.camada.querySelector('#' + (ac.dataset['alvo'] || '')) as HTMLInputElement | null;
           if (inp && !inp.disabled) inp.value = iso(this.hoje);

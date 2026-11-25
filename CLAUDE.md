@@ -328,6 +328,17 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - A cobrança vem com a NF escolhida e aparece no bloco do envio.
     - Indicadores e Lista abrem. Sem erro de JavaScript, e o celular sem rolagem lateral.
   - **Não compilado nem testado no Protheus.**
+- **25/11/2026 (2ª), envios parciais conferidos na homologação** (pela API, só leitura):
+  - API `2026-11-25a`, ZLE e `ZLC_NF` criados (`temEnvios`/`temNfCusto` verdadeiros);
+  - 21 pedidos em 2 NFs, com `nfPrincipal` certo em todos, e nenhum gravado na ZLE ainda;
+  - efeito: os 21 tinham caído em Faturados. Em 20 deles a 2ª NF é do **mesmo dia** da 1ª, ou seja, saíram juntas.
+  - **Decisão do usuário:** NF seguinte sem linha na ZLE (`gravado` falso) e com a mesma `dataFat` da NF principal = **parte do 1º envio** (`Env.junto`).
+    - Ela copia o principal, fica fora das pendências por envio, do `porEnvio` (entra na linha do 1º, com as NFs juntas), da linha do tempo e do select de cobrança.
+    - O selo mostra "N NFs no mesmo envio".
+    - Na gaveta, "Não saiu junto: registrar envio separado" (`separar`, `envio-separar`) abre o formulário; ao salvar, manda **todos** os campos preenchidos, e a linha da ZLE nasce completa.
+    - Planilha: `envios_` com `junto`, aba Envios com as NFs juntas na linha do 1º.
+  - Com a regra, na homologação: **20 em Entregues e 1 em Faturados** (000446, NFs de 13/02 e 20/02, parcial de verdade).
+  - Testado com a API falsa (pedido com a 2ª NF do mesmo dia): fica em Entregues sem pendência; separar grava o envio completo. Sem erro de JavaScript.
 
 ## Pendências
 - **25/11/2026, envios parciais:**
