@@ -350,8 +350,18 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
   - Só mudou depois de compilar o `RESTLOGREL.tlpp` **também no `romulo`**.
   - **Na homologação, compilar a API no `romulo`**, junto com o `logrel.app`. Para conferir, use o Diagnóstico ou o GET (`versao`).
   - Conferido pela API às 09:33: `2026-11-25b`, `opcoes.tipoFrete` com as 6 opções do SX3. Nos pedidos: 2.556 C, 47 F, 37 S, 1 R, 1 D e 199 vazios; nos 223 sem NF, 118 estão vazios.
+- **25/11/2026 (5ª), produção aplicada pelo usuário (patch pelo TOTVS Cloud) e conferida pela API** (só leitura):
+  - API `2026-11-25b`, 4.156 pedidos em 7,2 s, nenhum campo faltando;
+  - ZLE e `ZLC_NF` criados (`temEnvios`/`temNfCusto`) e `ZLH_OBS` com C 250;
+  - `opcoes.tipoFrete` com as 6 opções; nos pedidos: 3.738 C, 29 F, 37 S, 10 D, 1 R e 341 vazios;
+  - 24 pedidos em 2+ NFs, com `nfPrincipal` certo em todos:
+    - 21 em Entregues (2ª NF do mesmo dia = junto com o 1º envio);
+    - 3 em Faturados aguardando o 2º envio: **000446** (2ª NF 000000786, de 20/02), **003356** (000005665, de 23/11) e **003912** (000005599, de 18/11);
+  - **o `C5_ZINDICA` da produção ainda vai só até `6=Extravio`**: falta o `7=Outros`;
+  - **000650 e 003050 continuam sem finalização** (Enviados, indicador 6). O 002731 está como retorno desde 28/09.
 
 ## Pendências
+- **25/11/2026, produção:** criar o `7=Outros` no `C5_ZINDICA`; finalizar o 000650 e o 003050 como extravio; colar o `planilha/Codigo.gs` atual no Apps Script.
 - **25/11/2026 (3ª):** compilar `RESTLOGREL.tlpp` `2026-11-25b` e o `logrel.app` (homologação e depois produção) e colar o `planilha/Codigo.gs` novo. Conferir se o `X3_CBOX` do `C5_TPFRETE` traz as 6 opções.
 - **25/11/2026, envios parciais:**
   1. Homologação: compilar `LOGRELUPD.prw`.
