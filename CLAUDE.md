@@ -361,8 +361,17 @@ A tela substitui o passo 4: a data de saída (`C5_FECENT`) põe o pedido na aba 
     - 3 em Faturados aguardando o 2º envio: **000446** (2ª NF 000000786, de 20/02), **003356** (000005665, de 23/11) e **003912** (000005599, de 18/11);
   - **o `C5_ZINDICA` da produção ainda vai só até `6=Extravio`**: falta o `7=Outros`;
   - **000650 e 003050 continuam sem finalização** (Enviados, indicador 6). O 002731 está como retorno desde 28/09.
+- **25/11/2026 (6ª), pedido do usuário: aba Entregas** (só a tela; a API continua a `2026-11-25b`). O pedido foi "todos os pedidos enviados, separados por dia de entrega, igual na programação, só que na entrega".
+  - `telaEntregas`/`cartaoEnt`, entre Programação e Lista. O dia é a **previsão da transportadora** (`C5_ZDTPREV`). Entram os pedidos na etapa `env` (enviados sem entrega). Os entregues hoje (`entFinal` = hoje) ficam marcados no fim da coluna de hoje.
+  - Colunas: Atrasadas (previsão < hoje), hoje e 4 dias úteis (fim de semana só com pedido, como na Programação, via `diasProgramacao`), Depois e Sem previsão.
+  - **Arrastar** (`data-arrasta-ent` → `data-dia-ent`, `arrastoEnt` separa da Programação) grava só a `dataPrevisao` (`prever`). Recusa um dia antes do envio. Só os dias recebem o cartão.
+  - Botões: **Entregue** grava hoje (`dataNovaEntrega` na reentrega). **Desfazer** (`desfazer-ent`) só para a entrega gravada hoje.
+  - Cartões do topo: previstas para hoje, atrasadas, em trânsito e sem previsão.
+  - O card "Entregas previstas para hoje" da Programação continua lá.
+  - Testado com a API falsa e Edge headless: 14 verificações ok, sem erro de JavaScript, celular sem rolagem lateral da página. Pacotes regerados em 25/11. **Não testado no Protheus.**
 
 ## Pendências
+- **25/11/2026 (6ª):** compilar o `logrel.app` novo (aba Entregas) na homologação e depois na produção. A API não muda.
 - **25/11/2026, produção:** ~~criar o `7=Outros` no `C5_ZINDICA`~~ (feito pelo usuário em 25/11); finalizar o 000650 e o 003050 como extravio; colar o `planilha/Codigo.gs` atual no Apps Script.
 - **25/11/2026 (3ª):** compilar `RESTLOGREL.tlpp` `2026-11-25b` e o `logrel.app` (homologação e depois produção) e colar o `planilha/Codigo.gs` novo. Conferir se o `X3_CBOX` do `C5_TPFRETE` traz as 6 opções.
 - **25/11/2026, envios parciais:**

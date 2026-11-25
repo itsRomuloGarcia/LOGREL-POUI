@@ -87,6 +87,10 @@ O período da consulta saiu do topo em 23/11/2026 (pedido do usuário). A tela c
 
   Os outros cartões: em trânsito atrasados, vencem em até 2 dias, faturados parados há mais de 2 dias, sem previsão, sem dados para a NF-e, aguardando reenvio e custo de frete em divergência. O filtro "Situação" tem a opção **Custo de frete em divergência**. Cada coluna tem o próprio seletor de ordem, do mais antigo para o mais novo ou o contrário, e a escolha fica guardada no navegador. Entregues mostra os últimos 30 dias, com opção de ver todos; com texto na busca, ou com um cartão ou filtro de quadro ligado, mostra todos os encontrados, de qualquer data (24/11/2026).
 - **Programação:** kanban das saídas por dia pela saída programada (`C5_FECENT`): não saíram, hoje e os próximos dias úteis, depois e sem programação. Arrastar o cartão reprograma; "Saiu" grava a data de envio de hoje; o botão DANFE imprime a nota do cartão. Embaixo, o card das entregas previstas para hoje, com o botão "Entregue". A coluna **Não saíram** tem uma caixa de filtro para digitar, sem opções: pedido, cliente, cidade, transportadora, NF… (a mesma busca do topo). Os cartões do topo (saem hoje, não saíram, entregas previstas hoje, com NF sem programação) levam à coluna ou ao bloco dos pedidos e o destacam.
+- **Entregas** (desde 25/11/2026): o mesmo kanban da Programação, mas com os pedidos **enviados e ainda sem entrega**, separados pelo dia da **previsão de entrega da transportadora** (`C5_ZDTPREV`). As colunas são: atrasadas (previsão passou), hoje e os próximos dias úteis, depois e sem previsão.
+  - Arrastar o cartão para outro dia grava a nova previsão. Não aceita dia antes do envio.
+  - "Entregue" grava a data de entrega de hoje (a nova data, na reentrega). O pedido fica marcado na coluna de hoje, com "Desfazer" só no mesmo dia.
+  - Os cartões do topo (previstas para hoje, atrasadas, em trânsito, sem previsão) levam à coluna dos pedidos.
 - **Lista completa:** um item do pedido por linha, com ordenação por coluna e exportação em CSV.
 - **Indicadores:**
   - prazo (no prazo × atrasado) e motivos de atraso, com percentual;

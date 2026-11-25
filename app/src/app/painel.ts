@@ -424,6 +424,7 @@ interface Estado {
 const ABAS: [string, string][] = [
   ['quadros', 'Quadros'],
   ['programacao', 'Programação'],
+  ['entregas', 'Entregas'],
   ['lista', 'Lista completa'],
   ['indicadores', 'Indicadores'],
 ];
@@ -442,6 +443,8 @@ export class Painel {
   /** Programacao: pedidos gravando (botao desligado) e o que esta sendo arrastado */
   private readonly ocupados = new Set<number>();
   private arrastando = 0;
+  /** o cartao arrastado e da aba Entregas (muda a previsao de entrega, nao a saida) */
+  private arrastoEnt = false;
   private limSemProg = LIMITE_CARTOES;
   /** importacao por planilha (janela aberta) */
   private imp: Imp | null = null;
@@ -1062,6 +1065,7 @@ export class Painel {
     const telas: Record<string, () => string> = {
       quadros: () => this.telaQuadros(),
       programacao: () => this.telaProgramacao(),
+      entregas: () => this.telaEntregas(),
       lista: () => this.telaLista(),
       indicadores: () => this.telaIndicadores(),
     };
@@ -1413,6 +1417,118 @@ export class Painel {
     </article>`;
   }
 
+  // ---------- Entregas (kanban por previsao de entrega) ----------
+  // Pedido do usuario (25/11/2026): "todos os pedidos enviados, separados por dia
+  // de entrega, igual na programacao, so que na entrega". O dia e a previsao da
+  // transportadora (C5_ZDTPREV). Em transito = etapa Enviado; os entregues hoje
+  // ficam na coluna de hoje, marcados. Arrastar para outro dia muda a previsao;
+  // "Entregue" grava a data de entrega de hoje (a nova data, na reentrega).
+  private telaEntregas(): string {
+    const hj = iso(this.hoje);
+    const regs = this.base();
+    const transito = regs.filter((r) => r.et === 'env');
+    const dias0 = this.diasProgramacao();
+    const fimFaixa = dias0[dias0.length - 1];
+    const comFds = [...new Set(transito.map((r) => r.p.dataPrevisao).filter((d) => d && d > hj && d < fimFaixa && !dias0.includes(d)))];
+    const dias = [...dias0, ...comFds].sort();
+    const porPrev = (a: Reg, b: Reg) => a.p.dataPrevisao.localeCompare(b.p.dataPrevisao) || a.p.pedido.localeCompare(b.p.pedido);
+    const atrasadas = transito.filter((r) => r.p.dataPrevisao && r.p.dataPrevisao < hj).sort(porPrev);
+    const entreguesHoje = regs.filter((r) => r.et === 'ent' && r.entFinal === hj);
+    const doDia = (d: string) => {
+      const it = transito.filter((r) => r.p.dataPrevisao === d).sort((a, b) => a.p.pedido.localeCompare(b.p.pedido));
+      // hoje: tambem o que foi entregue hoje (de qualquer previsao), no fim
+      return d === hj ? [...it, ...entreguesHoje.sort((a, b) => a.p.pedido.localeCompare(b.p.pedido))] : it;
+    };
+    const depois = transito.filter((r) => r.p.dataPrevisao > fimFaixa).sort(porPrev);
+    const semPrev = transito.filter((r) => !r.p.dataPrevisao).sort((a, b) => (a.p.dataEnvio || '').localeCompare(b.p.dataEnvio || '') || a.p.pedido.localeCompare(b.p.pedido));
+    const hoje = doDia(hj);
+    const emTransitoHoje = hoje.filter((r) => r.et === 'env').length;
+    const podeMover = !this.faltando.has(CAMPO.dataPrevisao);
+    const SEMANA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+    const rotDia = (d: string) => (d === hj ? `Hoje · ${fmtCurto(d)}` : `${SEMANA[(dt(d) as Date).getDay()]} · ${fmtCurto(d)}`);
+    const coluna = (id: string, dia: string, titulo: string, sub: string, cor: string, itens: Reg[], soltar: boolean) =>
+      `<section class="quadro kb-col" ${id ? `id="${id}"` : ''} ${soltar && podeMover ? `data-dia-ent="${dia}"` : ''} style="--cor:${cor}" aria-label="${esc(titulo)}">
+        <header><h2><span>${esc(titulo)}</span><span class="q num">${n0(itens.length)}</span></h2><p>${sub}</p></header>
+        <div class="lista">${itens.map((r) => this.cartaoEnt(r, dia, podeMover)).join('') || `<p class="muted vazio">${soltar && podeMover ? 'Arraste pedidos para cá.' : 'Nenhum pedido.'}</p>`}</div>
+      </section>`;
+    const kpi = (r: string, v: string, s: string, crit: boolean, alvo: string) =>
+      `<button type="button" class="kpi${crit ? ' crit' : ''}" data-acao="ir" data-alvo="${alvo}"><div class="r">${r}</div><div class="v">${v}</div><div class="s">${s} · clique para ver</div></button>`;
+    const cols = [
+      coluna('ent-atr', '', 'Atrasadas', 'previsão da transportadora já passou e sem entrega', '#b3261e', atrasadas, false),
+      ...dias.map((d) => {
+        const it = doDia(d);
+        const ent = it.filter((r) => r.et === 'ent').length;
+        return coluna(
+          d === hj ? 'ent-hoje' : '',
+          d,
+          rotDia(d),
+          d === hj ? `${n0(ent)} entregues · ${n0(it.length - ent)} em trânsito` : `${n0(it.length)} previstas · ${n0(it.reduce((s, r) => s + r.qtd, 0))} un`,
+          d === hj ? '#0b6e99' : '#5b8db8',
+          it,
+          true,
+        );
+      }),
+      coluna('', '', 'Depois', `previsão depois de ${fmtCurto(fimFaixa)}`, '#8a94a0', depois, false),
+      coluna('ent-sem', '', 'Sem previsão', 'enviados sem a data da transportadora · arraste para um dia', '#c8a400', semPrev, false),
+    ].join('');
+    return `${podeMover ? '' : '<p class="aviso">O campo da previsão de entrega (C5_ZDTPREV) não existe neste ambiente: a aba fica só para consulta.</p>'}
+      <div class="resumo">
+        ${kpi('Previstas para hoje', n0(hoje.length), `${n0(hoje.length - emTransitoHoje)} entregues · ${n0(emTransitoHoje)} em trânsito`, false, 'ent-hoje')}
+        ${kpi('Atrasadas', n0(atrasadas.length), 'previsão passou e sem entrega', atrasadas.length > 0, 'ent-atr')}
+        ${kpi('Em trânsito', n0(transito.length), `${n0(transito.reduce((s, r) => s + r.qtd, 0))} un enviadas e sem entrega`, false, 'ent-hoje')}
+        ${kpi('Sem previsão', n0(semPrev.length), 'enviados sem a data da transportadora', semPrev.length > 0, 'ent-sem')}
+      </div>
+      <section class="painel">
+        <header><h2>Entregas por dia</h2><p>Pedidos enviados e ainda sem entrega, no dia da previsão da transportadora (C5_ZDTPREV). Arraste o cartão para outro dia para mudar a previsão. "Entregue" grava a data de entrega de hoje (a nova data, quando houve reentrega). Os entregues hoje aparecem marcados na coluna de hoje. Clique no cartão para abrir o pedido.</p></header>
+        <div class="kb-quadro">${cols}</div>
+      </section>`;
+  }
+
+  /** Cartao da aba Entregas. dia = data da coluna ('' = atrasadas, depois ou sem previsao) */
+  private cartaoEnt(r: Reg, dia: string, podeMover: boolean): string {
+    const p = r.p;
+    const hj = iso(this.hoje);
+    const ocupado = this.ocupados.has(p.recno);
+    const entregue = r.et === 'ent';
+    const pills: string[] = [];
+    if (!entregue && r.prazo && r.prazo !== 'noprazo') pills.push(this.pillPrazo(r, true));
+    if (p.reentrega === 'SIM') pills.push('<span class="pill reent">Reentrega</span>');
+    if (p.indicador) pills.push(`<span class="pill semprev">${esc(this.txtOp('indicador', p.indicador))}</span>`);
+    let linha = '';
+    let botao = '';
+    if (entregue) {
+      linha = `<span class="kb-st ok">✓ Entregue ${fmtCurto(r.entFinal)}${p.dataPrevisao && p.dataPrevisao !== r.entFinal ? ` <span class="muted">(previsão ${fmtCurto(p.dataPrevisao)})</span>` : ''}</span>`;
+      botao = `<button type="button" class="btn-txt kb-btn" data-kb="desfazer-ent" data-rec="${p.recno}" ${ocupado ? 'disabled' : ''}>Desfazer</button>`;
+    } else {
+      const d = p.dataPrevisao ? dias(dt(p.dataPrevisao) as Date, this.hoje) : 0;
+      linha =
+        dia === '' && p.dataPrevisao && d > 0
+          ? `<span class="kb-st crit">Previsão ${fmtCurto(p.dataPrevisao)} · há ${d} d</span>`
+          : `<span class="m">Enviado ${fmtCurto(p.dataEnvio)}${p.dataPrevisao && dia === '' ? ` · previsão ${fmt(p.dataPrevisao)}` : ''}${this.cteTxt(r)}</span>`;
+      botao = `<button type="button" class="btn pri kb-btn" data-kb="entregue" data-rec="${p.recno}" ${ocupado ? 'disabled' : ''} title="Grava a data de entrega de hoje">${ocupado ? 'Gravando…' : 'Entregue'}</button>`;
+    }
+    const arrasta = !entregue && podeMover && !ocupado;
+    const obs = p.obsEntrega ? `<span class="m kb-obs" title="${esc(p.obsEntrega)}">📝 ${esc(p.obsEntrega.length > 70 ? p.obsEntrega.slice(0, 70) + '…' : p.obsEntrega)}</span>` : '';
+    return `<article class="cartao kb${entregue ? ' feito' : ''}" data-ped="${p.recno}" tabindex="0" ${arrasta ? `draggable="true" data-arrasta-ent="${p.recno}"` : ''} style="--cor:${ET[r.et].cor}">
+      <span class="l1"><b class="mono">${esc(p.pedido)}</b>${pills.join('')}</span>
+      <span class="cli" title="${esc(p.nome)}">${esc(p.fantasia || p.nome || '(sem nome)')}</span>
+      <span class="m">${esc([p.cidade, p.uf].filter(Boolean).join('/') || 'sem cidade')} · ${esc(this.transpNome(r))}</span>
+      <span class="m">${n0(r.qtd)} un${p.volume ? ` · ${n0(p.volume)} vol` : ''}${(p.notas || []).length ? ` · NF ${esc((p.notas || []).join(', '))}` : ''}</span>
+      ${obs}${linha}${botao ? `<span class="kb-acoes">${botao}</span>` : ''}
+    </article>`;
+  }
+
+  /** Aba Entregas: arrastou para um dia -> nova previsao de entrega */
+  private async prever(recno: number, dia: string): Promise<void> {
+    const r = this.reg(recno);
+    if (!r || !dia || r.p.dataPrevisao === dia || r.et !== 'env') return;
+    if (r.p.dataEnvio && dia < r.p.dataEnvio) {
+      this.aviso(`A previsão (${fmt(dia)}) não pode ser antes do envio (${fmt(r.p.dataEnvio)}).`, true);
+      return;
+    }
+    await this.gravarRapido(r, { dataPrevisao: dia }, `Pedido ${r.p.pedido}: previsão de entrega para ${fmt(dia)}.`);
+  }
+
   private async acaoKanban(acao: string, recno: number): Promise<void> {
     const hj = iso(this.hoje);
     if (acao === 'mais') {
@@ -1422,12 +1538,12 @@ export class Painel {
     }
     const r = this.reg(recno);
     if (!r) return;
+    const reent = r.p.reentrega === 'SIM' && !this.faltando.has(CAMPO.dataNovaEntrega);
     if (acao === 'saiu') await this.gravarRapido(r, { dataEnvio: hj }, `Pedido ${r.p.pedido}: saída registrada hoje.`);
     else if (acao === 'desfazer') await this.gravarRapido(r, { dataEnvio: '' }, `Pedido ${r.p.pedido}: saída desfeita.`);
-    else if (acao === 'entregue') {
-      const reent = r.p.reentrega === 'SIM' && !this.faltando.has(CAMPO.dataNovaEntrega);
-      await this.gravarRapido(r, reent ? { dataNovaEntrega: hj } : { dataEntrega: hj }, `Pedido ${r.p.pedido}: entrega registrada hoje.`);
-    }
+    else if (acao === 'entregue') await this.gravarRapido(r, reent ? { dataNovaEntrega: hj } : { dataEntrega: hj }, `Pedido ${r.p.pedido}: entrega registrada hoje.`);
+    // aba Entregas: desfaz so a entrega gravada hoje
+    else if (acao === 'desfazer-ent' && r.entFinal === hj) await this.gravarRapido(r, reent ? { dataNovaEntrega: '' } : { dataEntrega: '' }, `Pedido ${r.p.pedido}: entrega desfeita.`);
   }
 
   private async programar(recno: number, dia: string): Promise<void> {
@@ -3504,12 +3620,16 @@ export class Painel {
     });
 
     // Programacao: arrastar o pedido para outro dia (ou para "Sem programacao")
+    // (aba Entregas: data-arrasta-ent / data-dia-ent, muda a previsao de entrega)
+    const colAlvo = (ev: Event) => (ev.target as HTMLElement).closest?.(this.arrastoEnt ? '[data-dia-ent]' : '[data-dia]') as HTMLElement | null;
     raiz.addEventListener('dragstart', (ev) => {
-      const c = (ev.target as HTMLElement).closest?.('[data-arrasta]') as HTMLElement | null;
+      const c = (ev.target as HTMLElement).closest?.('[data-arrasta],[data-arrasta-ent]') as HTMLElement | null;
       if (!c || !ev.dataTransfer) return;
-      ev.dataTransfer.setData('text/plain', c.dataset['arrasta'] as string);
+      this.arrastoEnt = c.hasAttribute('data-arrasta-ent');
+      const rec = (this.arrastoEnt ? c.dataset['arrastaEnt'] : c.dataset['arrasta']) as string;
+      ev.dataTransfer.setData('text/plain', rec);
       ev.dataTransfer.effectAllowed = 'move';
-      this.arrastando = Number(c.dataset['arrasta']);
+      this.arrastando = Number(rec);
       c.classList.add('arrastando');
     });
     raiz.addEventListener('dragend', (ev) => {
@@ -3518,7 +3638,7 @@ export class Painel {
       raiz.querySelectorAll('.kb-col.alvo').forEach((x) => x.classList.remove('alvo'));
     });
     raiz.addEventListener('dragover', (ev) => {
-      const col = (ev.target as HTMLElement).closest?.('[data-dia]') as HTMLElement | null;
+      const col = colAlvo(ev);
       if (!col || !this.arrastando) return;
       ev.preventDefault();
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
@@ -3528,13 +3648,15 @@ export class Painel {
       }
     });
     raiz.addEventListener('drop', (ev) => {
-      const col = (ev.target as HTMLElement).closest?.('[data-dia]') as HTMLElement | null;
+      const col = colAlvo(ev);
       if (!col) return;
       ev.preventDefault();
       col.classList.remove('alvo');
       const rec = Number(ev.dataTransfer?.getData('text/plain') || this.arrastando);
       this.arrastando = 0;
-      if (rec) void this.programar(rec, col.dataset['dia'] === '-' ? '' : (col.dataset['dia'] as string));
+      if (!rec) return;
+      if (this.arrastoEnt) void this.prever(rec, col.dataset['diaEnt'] as string);
+      else void this.programar(rec, col.dataset['dia'] === '-' ? '' : (col.dataset['dia'] as string));
     });
 
     // Ordem dos quadros e campos da importacao
